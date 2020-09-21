@@ -3,28 +3,21 @@
 #include <chrono>
 
 
+template <int S1, int S2, int S3, int S4, typename dtype = float>
 class Tensor4D {
-public:
-    const int S1, S2, S3, S4;
-    const long long S34, S234, S1234;
-    typedef float dtype;
-    dtype *buffer;
+    typedef dtype arrty[S2][S3][S4];
 
 public:
-    Tensor4D(int s1, int s2, int s3, int s4)
-        : S1(s1), S2(s2), S3(s3), S4(s4),
-          S34(S3 * S4), S234(S2 * S34),
-          S1234(S1 * S234) {
-        buffer = new dtype[S1234];
-    }
+    arrty *buffer;
 
-    ~Tensor4D() {
-        delete[] buffer;
-    }
+public:
+    Tensor4D(): buffer(new arrty[S1]) { }
+
+    ~Tensor4D() { delete[] buffer; }
 
     std::istream& load(std::istream& is) {
-        for (int i = 0; i < S1234; i++) {
-            is.read((char*)(buffer + i), 4);
+        for (int i = 0; i < S1; i++) {
+            is.read((char*)buffer[i], sizeof(buffer[i]));
         }
         return is;
     }
@@ -36,27 +29,22 @@ public:
         datafile.close();
     }
 
-    void unpack_size(int &s1, int &s2, int &s3, int &s4) const {
-        s1 = S1; s2 = S2; s3 = S3; s4 = S4;
-    }
-
     dtype& operator() (int i1, int i2, int i3, int i4) {
-        return buffer[i1 * S234 + i2 * S34 + i3 * S4 + i4];
+        return buffer[i1][i2][i3][i4];
     }
 
     const dtype& operator() (int i1, int i2, int i3, int i4) const {
-        return buffer[i1 * S234 + i2 * S34 + i3 * S4 + i4];
+        return buffer[i1][i2][i3][i4];
     }
 };
 
 
-Tensor4D conv2d(const Tensor4D& input, const Tensor4D& weight, const Tensor4D& bias) {
-    int N, Cin, Cout, H, W, K;
-    input.unpack_size(N, Cin, H, W);
-    weight.unpack_size(Cout, Cin, K, K);
-    //Cout = bias.S4;
+template <int N, int Cin, int H, int W, int Cout, int K>
+Tensor4D<N, Cout, H, W> conv2d(const Tensor4D<N, Cin, H, W> &input,
+                            const Tensor4D<Cout, Cin, K, K> &weight,
+                            const Tensor4D<1, 1, 1, Cout> &bias) {
     int halfK = K / 2;
-    Tensor4D ret(N, Cout, H, W);
+    Tensor4D<N, Cout, H, W> ret;
     for (int in = 0; in < N; in++) {
         const int bh = 2, bw = 10;
         for (int nh0 = 0; nh0 < H; nh0 += bh) {
@@ -92,8 +80,9 @@ Tensor4D conv2d(const Tensor4D& input, const Tensor4D& weight, const Tensor4D& b
 
 
 int main() {
-    Tensor4D weight(64, 3, 3, 3), bias(1, 1, 1, 64);
-    Tensor4D input(20, 3, 1000, 2000);
+    Tensor4D<64, 3, 3, 3> weight;
+    Tensor4D<1, 1, 1, 64> bias;
+    Tensor4D<20, 3, 1000, 2000> input;
     weight.load("weight.dat");
     bias.load("bias.dat");
     input.load("input.dat");
@@ -101,12 +90,13 @@ int main() {
     using namespace std::chrono;
     std::cout << "start" << std::endl;
     auto t0 = steady_clock::now();
-    Tensor4D ret = conv2d(input, weight, bias);
+    auto ret = conv2d(input, weight, bias);
     auto t1 = steady_clock::now();
     auto span = duration_cast<duration<double> >(t1 - t0);
     std::cout << "time: " << span.count() << std::endl;
 
     std::ofstream ofs("output2.dat", std::ios::binary);
-    ofs.write((char*)&ret(0, 0, 0, 0), sizeof(Tensor4D::dtype) * ret.S234);
+    ofs.write((char*)ret.buffer, sizeof(ret.buffer[0]));
+
     return 0;
 }
