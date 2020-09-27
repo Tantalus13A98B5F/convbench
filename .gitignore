@@ -1,2 +1,6 @@
 *.dat
 perf.data*
+*.cfg
+*.pdf
+*.png
+*.optrpt
