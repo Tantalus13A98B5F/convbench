@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<head>
+  <meta charset="utf-8">
+  <script src="https://d3js.org/d3.v5.min.js"></script>
+  <script src="https://unpkg.com/@hpcc-js/wasm@0.3.11/dist/index.min.js"></script>
+  <script src="https://unpkg.com/d3-graphviz@3.0.5/build/d3-graphviz.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vue@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vue-resource@1.5.1"></script>
+</head>
+<body>
+  <div id="graph" style="text-align: center;"></div>
+  <div id="app"></div>
+  <script>
+  var app = new Vue({
+    el: '#app',
+    data: {
+      dotSrc: '',
+      bbs: [],
+      hiddenNodes: [],
+      frozen: false
+    },
+
+    mounted: function () {
+      let self = this
+      this.$http.get('main.json').then(function (rsp) {
+        let bblist = rsp.body
+
+        for (let bb of bblist) {
+          let lines = []
+          for (let inst of bb.insts) {
+            let temp = [inst.op, inst.args]
+            if (inst.dst) temp.push(inst.dst)
+            lines.push(temp.join(' '))
+          }
+          bb.insts = lines.join('\n')
+        }
+
+        self.bbs = bblist
+        self.render()
+      })
+    },
+
+    methods: {
+      updateDotSrc: function () {
+        function B(loc) { return 'B' + loc }
+        function FMTATTRS(attrs) {
+          let temp = []
+          for (let [k, v] of Object.entries(attrs))
+            temp.push(k + '=' + JSON.stringify(v))
+          return '[' + temp.join(',') + ']'
+        }
+        function FMT(nodes, attrs) {
+          let [src, dst] = nodes
+          let temp = [ src ]
+          if (dst) Array.prototype.push.apply(temp, [ '->', dst ])
+          if (attrs) temp.push(FMTATTRS(attrs))
+          temp.push(';')
+          return temp.join(' ')
+        }
+
+        let lines = [ 'digraph {', FMT(['node'], {style: 'filled'}) ]
+        for (let bb of this.bbs) {
+          if (this.hiddenNodes.includes(bb.loc)) continue
+          let label = bb.loc+': '+bb.percent+'\n'+bb.insts
+          let attrs = {shape: 'box', label: label}
+          if (bb.percent > 1) attrs['fillcolor'] = "#d62728"
+          lines.push(FMT([ B(bb.loc) ], attrs))
+          if (bb.next_ && !this.hiddenNodes.includes(bb.next_))
+            lines.push(FMT([ B(bb.loc), B(bb.next_) ]))
+          if (bb.jump && !this.hiddenNodes.includes(bb.jump))
+            lines.push(FMT([ B(bb.loc), B(bb.jump) ], { style: 'dotted' }))
+        }
+        lines.push('}')
+        this.dotSrc = lines.join('\n')
+      },
+
+      render: function () {
+        this.frozen = true;
+        this.updateDotSrc()
+        d3.select("#graph")
+          .graphviz()
+          .transition(function () {
+            return d3.transition()
+                     .delay(100)
+                     .duration(100);
+          })
+          .renderDot(this.dotSrc)
+          .on("end", this.startInteractive);
+      },
+
+      startInteractive: function () {
+        this.frozen = false;
+        let self = this
+        d3.selectAll('.node').on("click", function () {
+          if (self.frozen) return
+          let title = d3.select(this).selectAll('title').text().trim()
+          self.hiddenNodes.push(title.substr(1))
+          self.render()
+        });
+      }
+    }
+  })
+</script>
