@@ -45,6 +45,38 @@ Extractor<sizeof...(Args), true, Args...> extract(Args&... args) {
 }
 
 
+template <int dim, bool check = true>
+struct DimAcc {
+    DimAcc<dim-1, false> sub;
+    const std::size_t step;
+
+    DimAcc(const std::vector<std::size_t> &dims)
+        : sub(dims), step(sub.step * dims[dims.size() - dim + 1]) {
+        if (check) assert (dims.size() == dim);
+    }
+
+    template <typename First, typename... Args>
+    std::size_t calc(First cur, Args... args) {
+        return cur * step + sub.calc(args...);
+    }
+};
+
+template <bool check>
+struct DimAcc<1, check> {
+    const std::size_t step;
+
+    DimAcc(const std::vector<std::size_t> &dims)
+        : step(1) {
+        if (check) assert (dims.size() == 1);
+    }
+
+    template <typename First>
+    std::size_t calc(First cur) {
+        return cur;
+    }
+};
+
+
 template <typename dtype = float>
 class tensor {
 public:
@@ -61,13 +93,11 @@ tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
     std::size_t N, C, H, W, Cout, Cin, Ker, Ker2;
     extract(N, C, H, W).from(img.dims);
     extract(Cout, Cin, Ker, Ker2).from(weight.dims);
-    const std::size_t CHW = C * H * W, HW = H * W;
-    const std::size_t CKK = Cin * Ker * Ker, KK = Ker * Ker;
-    const std::size_t CHW2 = Cout * (H-2) * (W-2), HW2 = (H-2) * (W-2), W2 = W-2;
     assert (Cin == C);
     assert (Ker == Ker2);
     assert (Ker == 3);
     tensor<dtype> ret { N, Cout, H-2, W-2 };
+    DimAcc<4> idxImg(img.dims), idxWeight(weight.dims), idxRet(ret.dims);
     for (int in = 0; in < N; in++) {
         for (int co = 0; co < Cout; co++) {
             for (int ih = 0; ih < H-2; ih++) {
@@ -76,13 +106,13 @@ tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
                 for (int ci = 0; ci < Cin; ci++) {
                     for (int kh = 0; kh < 3; kh++) {
                     for (int kw = 0; kw < 3; kw++) {
-                        std::size_t widx = co * CKK + ci * KK + kh * Ker + kw,
-                               iidx = in * CHW + ci * HW + (ih+kh) * W + (iw+kw);
+                        std::size_t widx = idxWeight.calc(co, ci, kh, kw),
+                                    iidx = idxImg.calc(in, ci, ih+kh, iw+kw);
                         val += weight.data[widx] * img.data[iidx];
                     }
                     }
                 }
-                std::size_t ridx = in * CHW2 + co * HW2 + ih * W2 + iw;
+                std::size_t ridx = idxRet.calc(in, co, ih, iw);
                 ret.data[ridx] = val;
             }
             }
