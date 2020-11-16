@@ -22,10 +22,10 @@ n2 = c(n)
 print('end timing', time.ctime())
 print(time.time() - t1)
 
-n2 = n2[0, :, :, :].numpy()
+n2 = n2[0, :, 1:999, 1:1999].numpy()
 n2.tofile('output.dat')
 
 def diff():
-    n3 = loadnp('output2.dat').reshape(64, *imsize)
+    n3 = loadnp('output2.dat').reshape(20, 64, imsize[0]-2, imsize[1]-2)[0]
     return ((n3 - n2)**2).sum()
 

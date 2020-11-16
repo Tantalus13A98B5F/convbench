@@ -13,6 +13,38 @@ auto product(const contTy &cobj) -> typename contTy::value_type {
 }
 
 
+template <int width, bool check, typename First, typename... Args>
+struct Extractor {
+    First &cur;
+    Extractor<width - 1, false, Args...> subex;
+
+    Extractor(First &c, Args&... r): cur(c), subex(r...) {  }
+
+    void from(const std::vector<std::size_t> &src) {
+        if (check) assert (width == src.size());
+        cur = src[src.size() - width];
+        subex.from(src);
+    }
+};
+
+template <bool check, typename First>
+struct Extractor<1, check, First> {
+    First &cur;
+
+    Extractor(First &c): cur(c) {  }
+
+    void from(const std::vector<std::size_t> &src) {
+        if (check) assert (1 == src.size());
+        cur = src[src.size() - 1];
+    }
+};
+
+template <typename... Args>
+Extractor<sizeof...(Args), true, Args...> extract(Args&... args) {
+    return Extractor<sizeof...(Args), true, Args...>(args...);
+}
+
+
 template <typename dtype = float>
 class tensor {
 public:
@@ -26,15 +58,14 @@ public:
 
 template <typename dtype>
 tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
-    const std::size_t N = img.dims[0], C = img.dims[1],
-                 H = img.dims[2], W = img.dims[3];
-    const std::size_t Cout = weight.dims[0], Cin = weight.dims[1],
-                 Ker = weight.dims[2];
+    std::size_t N, C, H, W, Cout, Cin, Ker, Ker2;
+    extract(N, C, H, W).from(img.dims);
+    extract(Cout, Cin, Ker, Ker2).from(weight.dims);
     const std::size_t CHW = C * H * W, HW = H * W;
     const std::size_t CKK = Cin * Ker * Ker, KK = Ker * Ker;
     const std::size_t CHW2 = Cout * (H-2) * (W-2), HW2 = (H-2) * (W-2), W2 = W-2;
     assert (Cin == C);
-    assert (Ker == weight.dims[3]);
+    assert (Ker == Ker2);
     assert (Ker == 3);
     tensor<dtype> ret { N, Cout, H-2, W-2 };
     for (int in = 0; in < N; in++) {
