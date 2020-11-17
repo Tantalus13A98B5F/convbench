@@ -13,66 +13,45 @@ auto product(const contTy &cobj) -> typename contTy::value_type {
 }
 
 
-template <int width, bool check, typename First, typename... Args>
-struct Extractor {
-    First &cur;
-    Extractor<width - 1, false, Args...> subex;
+template <int Dim, bool Check = true>
+struct DimIdx {
+    DimIdx<Dim-1, false> sub;
+    const std::size_t step, range;
 
-    Extractor(First &c, Args&... r): cur(c), subex(r...) {  }
-
-    void from(const std::vector<std::size_t> &src) {
-        if (check) assert (width == src.size());
-        cur = src[src.size() - width];
-        subex.from(src);
-    }
-};
-
-template <bool check, typename First>
-struct Extractor<1, check, First> {
-    First &cur;
-
-    Extractor(First &c): cur(c) {  }
-
-    void from(const std::vector<std::size_t> &src) {
-        if (check) assert (1 == src.size());
-        cur = src[src.size() - 1];
-    }
-};
-
-template <typename... Args>
-Extractor<sizeof...(Args), true, Args...> extract(Args&... args) {
-    return Extractor<sizeof...(Args), true, Args...>(args...);
-}
-
-
-template <int dim, bool check = true>
-struct DimAcc {
-    DimAcc<dim-1, false> sub;
-    const std::size_t step;
-
-    DimAcc(const std::vector<std::size_t> &dims)
-        : sub(dims), step(sub.step * dims[dims.size() - dim + 1]) {
-        if (check) assert (dims.size() == dim);
+    DimIdx(const std::vector<std::size_t> &dims)
+        : sub(dims), step(sub.step * sub.range), range(dims[dims.size() - Dim]) {
+        if (Check) assert (dims.size() == Dim);
     }
 
     template <typename First, typename... Args>
-    std::size_t calc(First cur, Args... args) {
-        return cur * step + sub.calc(args...);
+    std::size_t idx(First cur, Args... args) const {
+        return cur * step + sub.idx(args...);
+    }
+
+    template <typename First, typename... Args>
+    void unpack(First &cur, Args&... args) const {
+        cur = range;
+        sub.unpack(args...);
     }
 };
 
-template <bool check>
-struct DimAcc<1, check> {
-    const std::size_t step;
+template <bool Check>
+struct DimIdx<1, Check> {
+    const std::size_t step, range;
 
-    DimAcc(const std::vector<std::size_t> &dims)
-        : step(1) {
-        if (check) assert (dims.size() == 1);
+    DimIdx(const std::vector<std::size_t> &dims)
+        : step(1), range(dims[dims.size() - 1]) {
+        if (Check) assert (dims.size() == 1);
     }
 
     template <typename First>
-    std::size_t calc(First cur) {
+    std::size_t idx(First cur) const {
         return cur;
+    }
+
+    template <typename First>
+    void unpack(First &cur) const {
+        cur = range;
     }
 };
 
@@ -85,19 +64,30 @@ public:
 
     tensor(std::initializer_list<std::size_t> args)
         : dims(args), data(product(args)) { }
+
+    template <typename DI, typename... Args>
+    dtype& operator()(const DI& dimidx, Args... args) {
+        return data[dimidx.idx(args...)];
+    }
+
+    template <typename DI, typename... Args>
+    const dtype& operator()(const DI& dimidx, Args... args) const {
+        return data[dimidx.idx(args...)];
+    }
 };
 
 
 template <typename dtype>
 tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
+    DimIdx<4> dimImg(img.dims), dimWeight(weight.dims);
     std::size_t N, C, H, W, Cout, Cin, Ker, Ker2;
-    extract(N, C, H, W).from(img.dims);
-    extract(Cout, Cin, Ker, Ker2).from(weight.dims);
+    dimImg.unpack(N, C, H, W);
+    dimWeight.unpack(Cout, Cin, Ker, Ker2);
     assert (Cin == C);
     assert (Ker == Ker2);
     assert (Ker == 3);
     tensor<dtype> ret { N, Cout, H-2, W-2 };
-    DimAcc<4> idxImg(img.dims), idxWeight(weight.dims), idxRet(ret.dims);
+    DimIdx<4> dimRet(ret.dims);
     for (int in = 0; in < N; in++) {
         for (int co = 0; co < Cout; co++) {
             for (int ih = 0; ih < H-2; ih++) {
@@ -106,14 +96,11 @@ tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
                 for (int ci = 0; ci < Cin; ci++) {
                     for (int kh = 0; kh < 3; kh++) {
                     for (int kw = 0; kw < 3; kw++) {
-                        std::size_t widx = idxWeight.calc(co, ci, kh, kw),
-                                    iidx = idxImg.calc(in, ci, ih+kh, iw+kw);
-                        val += weight.data[widx] * img.data[iidx];
+                        val += weight(dimWeight, co, ci, kh, kw) * img(dimImg, in, ci, ih+kh, iw+kw);
                     }
                     }
                 }
-                std::size_t ridx = idxRet.calc(in, co, ih, iw);
-                ret.data[ridx] = val;
+                ret(dimRet, in, co, ih, iw) = val;
             }
             }
         }
