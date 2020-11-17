@@ -92,6 +92,87 @@ public:
 };
 
 
+
+template <typename dtype = std::size_t>
+class range {
+    dtype start, stop;
+
+public:
+    class iterator {
+        dtype val;
+
+    public:
+        iterator(dtype v): val(v) {}
+
+        bool operator!=(const iterator& rhs) const {
+            return val != rhs.val;
+        }
+
+        void operator++() { val++; }
+
+        dtype operator*() const { return val; }
+    };
+
+    range(dtype s0, dtype s1)
+        : start(s0), stop(s1) { }
+
+    iterator begin() const {
+        return iterator(start);
+    }
+
+    iterator end() const {
+        return iterator(stop);
+    }
+
+    range<range<dtype>> seg(dtype seglen) const {
+        return range<range<dtype>>(start, stop, seglen);
+    }
+};
+
+
+template <typename dtype>
+class range<range<dtype>> {
+    dtype start, stop, seglen;
+
+public:
+    class iterator {
+        dtype start, stop, limit, step;
+
+    public:
+        iterator(dtype start, dtype stop, dtype limit, dtype step)
+            : start(start), stop(stop), limit(limit), step(step) { }
+
+        bool operator!=(const iterator& rhs) const {
+            return start != rhs.start || stop != rhs.stop;
+        }
+
+        void operator++() {
+            start += step;
+            if (start >= limit)
+                start = stop = -1;
+            else
+                stop = std::min(stop + step, limit);
+        }
+
+        range<dtype> operator*() const {
+            return range<dtype>(start, stop);
+        }
+    };
+
+    range(dtype start, dtype stop, dtype seglen)
+        : start(start), stop(stop), seglen(seglen) {}
+
+    iterator begin() const {
+        return iterator(start, std::min(start+seglen, stop),
+                        stop, seglen);
+    }
+
+    iterator end() const {
+        return iterator(-1, -1, -1, -1);
+    }
+};
+
+
 template <typename dtype>
 tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
     DimIdx<4> dimImg(img.dims), dimWeight(weight.dims);
@@ -103,15 +184,15 @@ tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
     assert (Ker == 3);
     tensor<dtype> ret { N, Cout, H-2, W-2 };
     DimIdx<4> dimRet(ret.dims);
-    for (int in = 0; in < N; in++)
-    for (int co = 0; co < Cout; co++)
-    for (int ih = 0; ih < H-2; ih++)
-    for (int iw = 0; iw < W-2; iw++)
+    for (auto in: range<int>(0, N))
+    for (auto co: range<int>(0, Cout))
+    for (auto ih: range<int>(0, H-2))
+    for (auto iw: range<int>(0, W-2))
     {
         dtype val = 0;
-        for (int ci = 0; ci < Cin; ci++)
-        for (int kh = 0; kh < Ker; kh++)
-        for (int kw = 0; kw < Ker; kw++)
+        for (auto ci: range<int>(0, Cin))
+        for (int kh = 0; kh < 3; kh++)
+        for (int kw = 0; kw < 3; kw++)
              val += weight(dimWeight, co, ci, kh, kw)
                   * img(dimImg, in, ci, ih+kh, iw+kw);
         ret(dimRet, in, co, ih, iw) += val;
