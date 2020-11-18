@@ -92,83 +92,66 @@ public:
 };
 
 
+template <typename dtype, int unrollLen, int stepLen>
+struct RangeUnroll {
+    const dtype start;
 
-template <typename dtype = std::size_t>
-class range {
-    dtype start, stop;
-
-public:
-    class iterator {
-        dtype val;
-
-    public:
-        iterator(dtype v): val(v) {}
-
-        bool operator!=(const iterator& rhs) const {
-            return val != rhs.val;
-        }
-
-        void operator++() { val++; }
-
-        dtype operator*() const { return val; }
-    };
-
-    range(dtype s0, dtype s1)
-        : start(s0), stop(s1) { }
-
-    iterator begin() const {
-        return iterator(start);
-    }
-
-    iterator end() const {
-        return iterator(stop);
-    }
-
-    range<range<dtype>> seg(dtype seglen) const {
-        return range<range<dtype>>(start, stop, seglen);
+    RangeUnroll(dtype start)
+        : start(start) { }
+    
+    template <typename Func>
+    void foreach(Func func) const {
+        func(start, start+stepLen);
+        RangeUnroll<dtype, unrollLen-1, stepLen>(start+stepLen).foreach(func);
     }
 };
 
+template <typename dtype, int stepLen>
+struct RangeUnroll<dtype, 1, stepLen> {
+    const dtype start;
 
-template <typename dtype>
-class range<range<dtype>> {
-    dtype start, stop, seglen;
+    RangeUnroll(dtype start)
+        : start(start) { }
 
-public:
-    class iterator {
-        dtype start, stop, limit, step;
+    template <typename Func>
+    void foreach(Func func) const {
+        func(start, start+stepLen);
+    }
+};
 
-    public:
-        iterator(dtype start, dtype stop, dtype limit, dtype step)
-            : start(start), stop(stop), limit(limit), step(step) { }
+template <typename dtype = std::size_t, int unrollLen = 1, int stepLen = 1>
+struct Range {
+    const dtype start, stop;
 
-        bool operator!=(const iterator& rhs) const {
-            return start != rhs.start || stop != rhs.stop;
-        }
+    Range(dtype start, dtype stop)
+        : start(start), stop(stop) { }
 
-        void operator++() {
-            start += step;
-            if (start >= limit)
-                start = stop = -1;
-            else
-                stop = std::min(stop + step, limit);
-        }
-
-        range<dtype> operator*() const {
-            return range<dtype>(start, stop);
-        }
-    };
-
-    range(dtype start, dtype stop, dtype seglen)
-        : start(start), stop(stop), seglen(seglen) {}
-
-    iterator begin() const {
-        return iterator(start, std::min(start+seglen, stop),
-                        stop, seglen);
+    template <int newUnrollLen>
+    auto fullUnroll() -> RangeUnroll<dtype, newUnrollLen, stepLen> {
+        return RangeUnroll<dtype, newUnrollLen, stepLen>(start);
     }
 
-    iterator end() const {
-        return iterator(-1, -1, -1, -1);
+    template <int newUnrollLen>
+    auto unrollBy() -> Range<dtype, newUnrollLen, stepLen> {
+        return Range<dtype, newUnrollLen, stepLen>(start, stop);
+    }
+
+    template <int newStepLen>
+    auto stepBy() -> Range<dtype, unrollLen, newStepLen> {
+        return Range<dtype, unrollLen, newStepLen>(start, stop);
+    }
+
+    template <typename Func>
+    void foreach(Func func) const {
+        constexpr int unrolledStep = unrollLen * stepLen;
+        dtype idx = start;
+        if (unrollLen > 1)
+            for (; idx + unrolledStep <= stop; idx += unrolledStep)
+                RangeUnroll<dtype, unrollLen, stepLen>(idx).foreach(func);
+        for (; idx < stop; idx += stepLen) {
+            dtype idx2 = (stepLen != 1) ? std::min(idx+stepLen, stop) : idx+1;
+            func(idx, idx2);
+        }
     }
 };
 
@@ -184,19 +167,27 @@ tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
     assert (Ker == 3);
     tensor<dtype> ret { N, Cout, H-2, W-2 };
     DimIdx<4> dimRet(ret.dims);
-    for (auto in: range<int>(0, N))
-    for (auto co: range<int>(0, Cout))
-    for (auto ih: range<int>(0, H-2))
-    for (auto iw: range<int>(0, W-2))
-    {
+    Range<>(0, N).foreach([&] (int in, int in2) {
+    //Range<>(0, H-2).stepBy<2>().foreach([&] (int th, int th2) {
+    Range<>(0, Cout).foreach([&] (int co, int co2) {
+    Range<>(0, Cin).foreach([&] (int ci, int ci2) {
+    Range<>(0, H-2).foreach([&] (int ih, int ih2) {
+    Range<>(0, W-2).foreach([&] (int iw, int iw2) {
+    //Range<>(th, th2).unrollBy<2>().foreach([&] (int ih, int ih2) {
         dtype val = 0;
-        for (auto ci: range<int>(0, Cin))
-        for (int kh = 0; kh < 3; kh++)
-        for (int kw = 0; kw < 3; kw++)
+        Range<>(0, 3).fullUnroll<3>().foreach([&] (int kh, int kh2) {
+        Range<>(0, 3).fullUnroll<3>().foreach([&] (int kw, int kw2) {
              val += weight(dimWeight, co, ci, kh, kw)
                   * img(dimImg, in, ci, ih+kh, iw+kw);
+        });
+        });
         ret(dimRet, in, co, ih, iw) += val;
-    }
+    });
+    });
+    });
+    });
+    });
+    //});
     return ret;
 }
 
@@ -217,7 +208,7 @@ int main() {
     auto span = duration_cast<duration<double> >(t1 - t0);
     std::cout << "time: " << span.count() << std::endl;
 
-    std::ofstream ofs("output2.dat", std::ofstream::binary);
-    result.dumpBinary(ofs);
+    //std::ofstream ofs("output2.dat", std::ofstream::binary);
+    //result.dumpBinary(ofs);
     return 0;
 }
