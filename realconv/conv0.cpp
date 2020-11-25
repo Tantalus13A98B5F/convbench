@@ -126,6 +126,30 @@ struct Range {
     Range(dtype start, dtype stop)
         : start(start), stop(stop) { }
 
+    class iterator {
+        dtype val;
+
+    public:
+        iterator(dtype v): val(v) {}
+
+        bool operator!=(const iterator& rhs) const {
+            return val != rhs.val;
+        }
+
+        void operator++() { val += stepLen; }
+
+        dtype operator*() const { return val; }
+    };
+
+    iterator begin() const {
+        return iterator(start);
+    }
+
+    iterator end() const {
+        dtype tmp = stop + stepLen - 1;
+        return iterator(tmp - tmp % stepLen);
+    }
+
     template <int newUnrollLen>
     auto fullUnroll() -> RangeUnroll<dtype, newUnrollLen, stepLen> {
         return RangeUnroll<dtype, newUnrollLen, stepLen>(start);
@@ -220,6 +244,31 @@ struct Storage<dtype, 1, 1> {
 };
 
 
+template <typename dtype, int hlen, int wlen>
+struct kernel {
+    const Storage<dtype, 2, 3, 3> &wStore;
+    const Storage<dtype, 2, hlen+2, wlen+2> iStore;
+
+    template <bool dimcheck>
+    kernel(const dtype *img, const DimIdx<2, dimcheck> &di, const Storage<dtype, 2, 3, 3> &wS)
+        : wStore(wS), iStore(img, di) { }
+
+    template <int hoff, int woff>
+    dtype compute() const {
+        dtype val = 0;
+        val += wStore.template fetch<0, 0>() * iStore.template fetch<hoff+0, woff+0>();
+        val += wStore.template fetch<0, 1>() * iStore.template fetch<hoff+0, woff+1>();
+        val += wStore.template fetch<0, 2>() * iStore.template fetch<hoff+0, woff+2>();
+        val += wStore.template fetch<1, 0>() * iStore.template fetch<hoff+1, woff+0>();
+        val += wStore.template fetch<1, 1>() * iStore.template fetch<hoff+1, woff+1>();
+        val += wStore.template fetch<1, 2>() * iStore.template fetch<hoff+1, woff+2>();
+        val += wStore.template fetch<2, 0>() * iStore.template fetch<hoff+2, woff+0>();
+        val += wStore.template fetch<2, 1>() * iStore.template fetch<hoff+2, woff+1>();
+        val += wStore.template fetch<2, 2>() * iStore.template fetch<hoff+2, woff+2>();
+        return val;
+    }
+};
+
 template <typename dtype>
 tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
     DimIdx<4> dimImg(img.dims), dimWeight(weight.dims);
@@ -231,58 +280,31 @@ tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
     assert (Ker == 3);
     tensor<dtype> ret { N, Cout, H-2, W-2 };
     DimIdx<4> dimRet(ret.dims);
-#define RANGECLASS
-#ifdef RANGECLASS
-    Range<>(0, N).foreach([&] (int in, int in2) {
-    Range<>(0, Cout).foreach([&] (int co, int co2) {
-    Range<>(0, Cin).foreach([&] (int ci, int ci2) {
-    Range<>(0, H-2).foreach([&] (int ih, int ih2) {
-        Storage<float, 2, 3, 3> wStore(&weight(dimWeight, co, ci, 0, 0), dimWeight.sub.sub);
-    Range<>(0, W-2).foreach([&] (int iw, int iw2) {
-        Storage<float, 2, 3, 3> iStore(&img(dimImg, in, ci, ih, iw), dimImg.sub.sub);
-        dtype val = 0;
-        val += wStore.fetch<0, 0>() * iStore.fetch<0, 0>();
-        val += wStore.fetch<0, 1>() * iStore.fetch<0, 1>();
-        val += wStore.fetch<0, 2>() * iStore.fetch<0, 2>();
-        val += wStore.fetch<1, 0>() * iStore.fetch<1, 0>();
-        val += wStore.fetch<1, 1>() * iStore.fetch<1, 1>();
-        val += wStore.fetch<1, 2>() * iStore.fetch<1, 2>();
-        val += wStore.fetch<2, 0>() * iStore.fetch<2, 0>();
-        val += wStore.fetch<2, 1>() * iStore.fetch<2, 1>();
-        val += wStore.fetch<2, 2>() * iStore.fetch<2, 2>();
+    for (auto in: Range<>(0, N)) {
+    for (auto co: Range<>(0, Cout)) {
+    for (auto ci: Range<>(0, Cin)) {
+        Storage<dtype, 2, 3, 3> wStore(&weight(dimWeight, co, ci, 0, 0), dimWeight.sub.sub);
+    for (auto ih: Range<>(0, H-2)) {
+    for (auto iw: Range<>(0, W-2).stepBy<2>()) {
+        if (iw + 2 <= W-2) {
+            kernel<dtype, 1, 2> cobj(&img(dimImg, in, ci, ih, iw), dimImg.sub.sub, wStore);
+            ret(dimRet, in, co, ih+0, iw+0) += cobj.template compute<0, 0>();
+            ret(dimRet, in, co, ih+0, iw+1) += cobj.template compute<0, 1>();
+        } else {
+            kernel<dtype, 1, 1> cobj(&img(dimImg, in, ci, ih, iw), dimImg.sub.sub, wStore);
+            ret(dimRet, in, co, ih+0, iw+0) += cobj.template compute<0, 0>();
+        }
         //Range<>(0, 3).fullUnroll<3>().foreach([&] (int kh, int kh2) {
         //Range<>(0, 3).fullUnroll<3>().foreach([&] (int kw, int kw2) {
         //     val += weight(dimWeight, co, ci, kh, kw)
         //          * img(dimImg, in, ci, ih+kh, iw+kw);
         //});
         //});
-        ret(dimRet, in, co, ih, iw) += val;
-    });
-    });
-    });
-    });
-    });
-#else
-    for (int in = 0; in < N; in++) {
-    for (int co = 0; co < Cout; co++) {
-    for (int ci = 0; ci < Cin; ci++) {
-    for (int ih = 0; ih < H-2; ih++) {
-    //#pragma unroll
-    for (int iw = 0; iw < W-2; iw++) {
-        dtype val = 0;
-        for (int kh = 0; kh < 3; kh++) {
-        for (int kw = 0; kw < 3; kw++) {
-             val += weight(dimWeight, co, ci, kh, kw)
-                  * img(dimImg, in, ci, ih+kh, iw+kw);
-        }
-        }
-        ret(dimRet, in, co, ih, iw) += val;
     }
     }
     }
     }
     }
-#endif
     return ret;
 }
 

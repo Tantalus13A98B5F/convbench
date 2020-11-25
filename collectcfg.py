@@ -47,7 +47,8 @@ def get_insts(sym):
             yield InstLine(percent, loc, op, args, dst, comment)
         except:
             print(ln)
-            raise
+            #raise
+            return
 
 
 def is_terminal_inst(inst):
