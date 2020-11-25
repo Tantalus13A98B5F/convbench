@@ -1,6 +1,9 @@
+#!/usr/bin/env python3
 from collections import namedtuple, OrderedDict
 import subprocess as subp
 import weakref
+import json
+import sys
 import re
 
 
@@ -11,7 +14,7 @@ InstLine = namedtuple('InstLine',
 BasicBlock = namedtuple('BasicBlock',
     'percent loc insts next_ jump')
 REPORTCMD = 'perf report --stdio -q -g none -t \; --percent-limit 1'
-ANNOTACMD = 'perf annotate --stdio --no-source '
+ANNOTACMD = 'perf annotate --stdio --no-source "%s"'
 INSTREGEX = re.compile(r'([^<#]+)(<[^#]+>\s*)?(#.+)?')
 
 
@@ -28,18 +31,23 @@ def get_funcs():
 
 
 def get_insts(sym):
-    lines = subp.getoutput(ANNOTACMD + sym).splitlines()
+    print(ANNOTACMD % sym)
+    lines = subp.getoutput(ANNOTACMD % sym).splitlines()
     for ln in lines:
-        ln = ln.strip()
-        if '|' in ln or ':' not in ln: continue
-        segs = [i.strip() for i in ln.split(':', maxsplit=2)]
-        if not segs or not segs[0]: continue
-        percent, loc, inst = segs
-        percent = float(percent)
-        inst, dst, comment = INSTREGEX.fullmatch(inst).groups()
-        dst, comment = (dst or '').strip(), (comment or '').strip()
-        op, args, *_ = inst.strip().rsplit(maxsplit=1) + ['']
-        yield InstLine(percent, loc, op, args, dst, comment)
+        try:
+            ln = ln.strip()
+            if '|' in ln or ':' not in ln: continue
+            segs = [i.strip() for i in ln.split(':', maxsplit=2)]
+            if not segs or not segs[0]: continue
+            percent, loc, inst = segs
+            percent = float(percent)
+            inst, dst, comment = INSTREGEX.fullmatch(inst).groups()
+            dst, comment = (dst or '').strip(), (comment or '').strip()
+            op, args, *_ = inst.strip().rsplit(maxsplit=1) + ['']
+            yield InstLine(percent, loc, op, args, dst, comment)
+        except:
+            print(ln)
+            raise
 
 
 def is_terminal_inst(inst):
@@ -68,7 +76,8 @@ def get_bbs(sym):
             ishead = True
     # enumerate BBs
     def foo():
-        cur = BasicBlock(0, 'START', [], '', '')
+        newsym, _ = re.subn(r'\W', '_', sym)
+        cur = BasicBlock(0, 'START_' + newsym, [], '', '')
         for item in insts:
             if item.loc in headset:
                 if cur:
@@ -92,4 +101,16 @@ def to_json(data):
         return {k: to_json(v) for k, v in data._asdict().items()}
     else:
         return data
+
+
+if __name__ == '__main__':
+    assert len(sys.argv) == 2
+    fn = sys.argv[1]
+    temp = []
+    problematics = ['[unknown', 'libc-', 'ld-']
+    for func in get_funcs():
+        if all(m not in func.SharedObject for m in problematics):
+            temp.extend(get_bbs(func.Symbol))
+    with open(fn, 'w') as f:
+        json.dump(to_json(temp), f)
 

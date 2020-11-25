@@ -21,8 +21,14 @@
     },
 
     mounted: function () {
+      let cururl = new URL(document.URL)
+      let datafn = cururl.searchParams.get('data')
+      if (!datafn) {
+        alert('No `data` arg specified!')
+        return
+      }
       let self = this
-      this.$http.get('main.json').then(function (rsp) {
+      this.$http.get(datafn).then(function (rsp) {
         let bblist = rsp.body
 
         for (let bb of bblist) {

@@ -156,6 +156,70 @@ struct Range {
 };
 
 
+template <typename dtype, int Dims, int High, int... Lowers>
+struct Storage {
+    const Storage<dtype, Dims-1, Lowers...> lowerdims;
+    const Storage<dtype, Dims, High-1, Lowers...> siblings;
+
+    template <bool dimcheck>
+    Storage(const dtype *arr, const DimIdx<Dims, dimcheck> &di)
+        : lowerdims(arr, di.sub), siblings(arr + di.step, di) { }
+
+    template <int H2, int... L2>
+    dtype fetch() const {
+        if (H2 == 0)
+            return lowerdims.fetch<L2...>();
+        else
+            return siblings.fetch<H2-1, L2...>();
+    }
+};
+template <typename dtype, int Dims, int... Lowers>
+struct Storage<dtype, Dims, 1, Lowers...> {
+    const Storage<dtype, Dims-1, Lowers...> lowerdims;
+
+    template <bool dimcheck>
+    Storage(const dtype *arr, const DimIdx<Dims, dimcheck> &di)
+        : lowerdims(arr, di.sub) { }
+
+    template <int H2, int... L2>
+    dtype fetch() const {
+        //static_assert(H2 == 0, "");
+        return lowerdims.fetch<L2...>();
+    }
+};
+template <typename dtype, int High>
+struct Storage<dtype, 1, High> {
+    const dtype val;
+    const Storage<dtype, 1, High-1> siblings;
+
+    template <bool dimcheck>
+    Storage(const dtype *arr, const DimIdx<1, dimcheck> &di)
+        : val(*arr), siblings(arr + 1, di) { }
+
+    template <int H2>
+    dtype fetch() const {
+        if (H2 == 0)
+            return val;
+        else
+            return siblings.fetch<H2-1>();
+    }
+};
+template <typename dtype>
+struct Storage<dtype, 1, 1> {
+    const dtype val;
+
+    template <bool dimcheck>
+    Storage(const dtype *arr, const DimIdx<1, dimcheck> &di)
+        : val(*arr) { }
+
+    template <int H2>
+    dtype fetch() const {
+        //static_assert(H2 == 0, "");
+        return val;
+    }
+};
+
+
 template <typename dtype>
 tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
     DimIdx<4> dimImg(img.dims), dimWeight(weight.dims);
@@ -167,27 +231,58 @@ tensor<dtype> conv2d(const tensor<dtype> &img, const tensor<dtype> &weight) {
     assert (Ker == 3);
     tensor<dtype> ret { N, Cout, H-2, W-2 };
     DimIdx<4> dimRet(ret.dims);
+#define RANGECLASS
+#ifdef RANGECLASS
     Range<>(0, N).foreach([&] (int in, int in2) {
-    //Range<>(0, H-2).stepBy<2>().foreach([&] (int th, int th2) {
     Range<>(0, Cout).foreach([&] (int co, int co2) {
     Range<>(0, Cin).foreach([&] (int ci, int ci2) {
     Range<>(0, H-2).foreach([&] (int ih, int ih2) {
+        Storage<float, 2, 3, 3> wStore(&weight(dimWeight, co, ci, 0, 0), dimWeight.sub.sub);
     Range<>(0, W-2).foreach([&] (int iw, int iw2) {
-    //Range<>(th, th2).unrollBy<2>().foreach([&] (int ih, int ih2) {
+        Storage<float, 2, 3, 3> iStore(&img(dimImg, in, ci, ih, iw), dimImg.sub.sub);
         dtype val = 0;
-        Range<>(0, 3).fullUnroll<3>().foreach([&] (int kh, int kh2) {
-        Range<>(0, 3).fullUnroll<3>().foreach([&] (int kw, int kw2) {
-             val += weight(dimWeight, co, ci, kh, kw)
-                  * img(dimImg, in, ci, ih+kh, iw+kw);
-        });
-        });
+        val += wStore.fetch<0, 0>() * iStore.fetch<0, 0>();
+        val += wStore.fetch<0, 1>() * iStore.fetch<0, 1>();
+        val += wStore.fetch<0, 2>() * iStore.fetch<0, 2>();
+        val += wStore.fetch<1, 0>() * iStore.fetch<1, 0>();
+        val += wStore.fetch<1, 1>() * iStore.fetch<1, 1>();
+        val += wStore.fetch<1, 2>() * iStore.fetch<1, 2>();
+        val += wStore.fetch<2, 0>() * iStore.fetch<2, 0>();
+        val += wStore.fetch<2, 1>() * iStore.fetch<2, 1>();
+        val += wStore.fetch<2, 2>() * iStore.fetch<2, 2>();
+        //Range<>(0, 3).fullUnroll<3>().foreach([&] (int kh, int kh2) {
+        //Range<>(0, 3).fullUnroll<3>().foreach([&] (int kw, int kw2) {
+        //     val += weight(dimWeight, co, ci, kh, kw)
+        //          * img(dimImg, in, ci, ih+kh, iw+kw);
+        //});
+        //});
         ret(dimRet, in, co, ih, iw) += val;
     });
     });
     });
     });
     });
-    //});
+#else
+    for (int in = 0; in < N; in++) {
+    for (int co = 0; co < Cout; co++) {
+    for (int ci = 0; ci < Cin; ci++) {
+    for (int ih = 0; ih < H-2; ih++) {
+    //#pragma unroll
+    for (int iw = 0; iw < W-2; iw++) {
+        dtype val = 0;
+        for (int kh = 0; kh < 3; kh++) {
+        for (int kw = 0; kw < 3; kw++) {
+             val += weight(dimWeight, co, ci, kh, kw)
+                  * img(dimImg, in, ci, ih+kh, iw+kw);
+        }
+        }
+        ret(dimRet, in, co, ih, iw) += val;
+    }
+    }
+    }
+    }
+    }
+#endif
     return ret;
 }
 

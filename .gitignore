@@ -4,3 +4,6 @@ perf.data*
 *.pdf
 *.png
 *.optrpt
+*.x
+*.s
+*.json
