@@ -40,7 +40,7 @@ struct SolverNCHW {
 
     void compute() {
         DimIdx<4> dData {N, C, H, W};
-        DimIdx<6> dScratch {N, C, K, K, H, W};
+        DimIdx<6> dScratch {N, H, W, C, K, K};
         auto t1 = steady_clock::now();
         #pragma omp parallel for
         for (int in = 0; in < N; in++)
@@ -53,7 +53,7 @@ struct SolverNCHW {
                 for (int kw = 0; kw < K-1; kw++)
                 {
                     int th = ih + kh - 1, tw = iw + kw - 1;
-                    dScratch(scratch, in, ic, kh, kw, ih, iw) =
+                    dScratch(scratch, in, ih, iw, ic, kh, kw) =
                         (th < 0 || th >= H || tw < 0 || tw >= W) ? 0 :
                         dData(data, in, ic, th, tw);
                 }
@@ -62,9 +62,9 @@ struct SolverNCHW {
         auto t2 = steady_clock::now();
         int CKK = C * K * K, HW = H * W;
         for (int in = 0; in < N; in++) {
-            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                     F, HW, CKK, 1, weight.data(), CKK,
-                    scratch.data() + in * CKK * HW, HW,
+                    scratch.data() + in * CKK * HW, CKK,
                     0, result.data() + in * F * HW, HW);
         }
         auto t3 = steady_clock::now();
@@ -165,14 +165,21 @@ int main() {
         total = Co * Ci * Kh * Kw;
         tensor_t weight(total);
         read_binary(weightfile, weight);
-        SolverNHWC solver(weight, indata,
+        SolverNCHW solver_nchw(weight, indata,
+                {Co, Ci, Kh, Kw}, {nbatch, Ci, HW, HW});
+        SolverNHWC solver_nhwc(weight, indata,
                 {Co, Ci, Kh, Kw}, {nbatch, Ci, HW, HW});
         for (int r = 0; r < 10; r++)
         {
-            solver.compute();
+            solver_nchw.compute();
+            std::cout << "conv,nchw," << Co << ',' << HW
+                      << ',' << solver_nchw.time_convert * 1000
+                      << ',' << solver_nchw.time_gemm * 1000
+                      << std::endl;
+            solver_nhwc.compute();
             std::cout << "conv,nhwc," << Co << ',' << HW
-                      << ',' << solver.time_convert * 1000
-                      << ',' << solver.time_gemm * 1000
+                      << ',' << solver_nhwc.time_convert * 1000
+                      << ',' << solver_nhwc.time_gemm * 1000
                       << std::endl;
         }
     }
