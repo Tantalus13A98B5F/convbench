@@ -88,7 +88,8 @@ struct DimIdx {
     }
 
     template <typename contTy, typename... Args>
-    auto operator() (contTy &arr, Args... args) -> typename refElem<contTy>::type {
+    auto operator() (contTy &arr, Args... args) const
+            -> typename refElem<contTy>::type {
         return arr[idx(args...)];
     }
 };
