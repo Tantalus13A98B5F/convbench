@@ -91,18 +91,22 @@ struct SolverNHWC {
         assert (dWeight.validate(DI::Any, C, 3, K));
         // convert payload
         DimIdx<4> dData2 {N, H, W, C}, dWeight2 {F, K, K, C};
+        auto aData = dData.bind(data);
+        auto aWeight = dWeight.bind(weight);
+        auto aData2 = dData2.bind(this->data);
+        auto aWeight2 = dWeight2.bind(this->weight);
         this->data.resize(dData.totalsize);
         for (int in = 0; in < N; in++)
         for (int ic = 0; ic < C; ic++)
         for (int ih = 0; ih < H; ih++)
         for (int iw = 0; iw < W; iw++)
-            dData2(this->data, in, ih, iw, ic) = dData(data, in, ic, ih, iw);
+            aData2(in, ih, iw, ic) = aData(in, ic, ih, iw);
         this->weight.resize(dWeight.totalsize);
         for (int jf = 0; jf < F; jf++)
         for (int kh = 0; kh < K; kh++)
         for (int kw = 0; kw < K; kw++)
         for (int jc = 0; jc < C; jc++)
-            dWeight2(this->weight, jf, kh, kw, jc) = dWeight(weight, jf, jc, kh, kw);
+            aWeight2(jf, kh, kw, jc) = aWeight(jf, jc, kh, kw);
         scratch.resize(dData.totalsize * K * K);
         result.resize(N * F * H * W);
     }
@@ -110,6 +114,8 @@ struct SolverNHWC {
     void compute() {
         DimIdx<4> dData {N, H, W, C};
         DimIdx<6> dScratch {N, H, W, K, K, C};
+        auto aScratch = dScratch.bind(scratch);
+        auto aData = dData.bind(data);
         auto t1 = steady_clock::now();
         #pragma omp parallel for
         for (int in = 0; in < N; in++)
@@ -122,17 +128,17 @@ struct SolverNHWC {
                 int th = ih + kh - 1, tw = iw + kw - 1;
                 for (int ic = 0; ic < C; ic++)
                 {
-                    dScratch(scratch, in, ih, iw, kh, kw, ic) =
+                    aScratch(in, ih, iw, kh, kw, ic) =
                         (th < 0 || th >= H || tw < 0 || tw >= W) ? 0 :
-                        dData(data, in, th, tw, ic);
+                        aData(in, th, tw, ic);
                 }
             }
         }
         auto t2 = steady_clock::now();
         int CKK = C * K * K, NHW = N * H * W;
-        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                 NHW, F, CKK, 1, scratch.data(), CKK,
-                weight.data(), F,
+                weight.data(), CKK,
                 0, result.data(), F);
         auto t3 = steady_clock::now();
         time_convert = duration_cast<duration<double>>(t2 - t1).count();

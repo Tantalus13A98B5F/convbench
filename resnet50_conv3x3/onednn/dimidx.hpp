@@ -92,6 +92,25 @@ struct DimIdx {
             -> typename refElem<contTy>::type {
         return arr[idx(args...)];
     }
+
+    template <typename contTy>
+    struct Accessor {
+        const DimIdx<Dim> &dim;
+        contTy &cont;
+
+        Accessor(const DimIdx<Dim> &s, contTy &c)
+            : dim(s), cont(c) { }
+
+        template <typename... Args>
+        auto operator() (Args... args) const -> typename refElem<contTy>::type {
+            return cont[dim.idx(args...)];
+        }
+    };
+
+    template <typename contTy>
+    Accessor<contTy> bind(contTy &cont) const {
+        return Accessor<contTy>(*this, cont);
+    }
 };
 
 template <>
