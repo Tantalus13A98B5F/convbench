@@ -1,3 +1,5 @@
+#ifndef _DIMIDX_HPP_
+#define _DIMIDX_HPP_
 #include <initializer_list>
 #include <type_traits>
 #include <cassert>
@@ -129,3 +131,4 @@ struct DimIdx<0> {
 
 
 }  // end namespace
+#endif  // _DIMIDX_HPP_

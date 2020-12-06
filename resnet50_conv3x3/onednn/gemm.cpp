@@ -1,27 +1,11 @@
 #include <vector>
 #include <fstream>
 #include <iostream>
-#include <random>
-#include <algorithm>
-#include <chrono>
 #include <cassert>
 #include "mkl.h"
 #include "dimidx.hpp"
-using namespace std::chrono;
+#include "tensorutils.hpp"
 using DI::DimIdx;
-typedef std::vector<float> tensor_t;
-
-template <typename contTy>
-void read_binary(std::istream &is, contTy &vec) {
-    is.read((char*) vec.data(),
-            vec.size() * sizeof(contTy::value_type));
-}
-
-template <typename contTy>
-void init_rand(contTy &vec) {
-    std::minstd_rand0 randgen(0);
-    std::generate(vec.begin(), vec.end(), randgen);
-}
 
 struct SolverNCHW {
     tensor_t weight, data, scratch, result;
@@ -68,8 +52,12 @@ struct SolverNCHW {
                     0, result.data() + in * F * HW, HW);
         }
         auto t3 = steady_clock::now();
-        time_convert = duration_cast<duration<double>>(t2 - t1).count();
-        time_gemm = duration_cast<duration<double>>(t3 - t2).count();
+        time_convert = time_diff(t2, t1);
+        time_gemm = time_diff(t3, t2);
+        std::cout << "conv,nchw," << F << ',' << H
+                  << ',' << time_convert * 1000
+                  << ',' << time_gemm * 1000
+                  << std::endl;
     }
 
     const tensor_t& rebuild() {
@@ -89,26 +77,30 @@ struct SolverNHWC {
         dData.unpack(N, C, H, W);
         dWeight.unpack(F, DI::None, K, DI::None);
         assert (dWeight.validate(DI::Any, C, 3, K));
+    
         // convert payload
         DimIdx<4> dData2 {N, H, W, C}, dWeight2 {F, K, K, C};
         auto aData = dData.bind(data);
         auto aWeight = dWeight.bind(weight);
         auto aData2 = dData2.bind(this->data);
         auto aWeight2 = dWeight2.bind(this->weight);
+
         this->data.resize(dData.totalsize);
+        this->weight.resize(dWeight.totalsize);
+        scratch.resize(dData.totalsize * K * K);
+        result.resize(N * F * H * W);
+
         for (int in = 0; in < N; in++)
         for (int ic = 0; ic < C; ic++)
         for (int ih = 0; ih < H; ih++)
         for (int iw = 0; iw < W; iw++)
             aData2(in, ih, iw, ic) = aData(in, ic, ih, iw);
-        this->weight.resize(dWeight.totalsize);
+
         for (int jf = 0; jf < F; jf++)
         for (int kh = 0; kh < K; kh++)
         for (int kw = 0; kw < K; kw++)
         for (int jc = 0; jc < C; jc++)
             aWeight2(jf, kh, kw, jc) = aWeight(jf, jc, kh, kw);
-        scratch.resize(dData.totalsize * K * K);
-        result.resize(N * F * H * W);
     }
 
     void compute() {
@@ -141,11 +133,16 @@ struct SolverNHWC {
                 weight.data(), CKK,
                 0, result.data(), F);
         auto t3 = steady_clock::now();
-        time_convert = duration_cast<duration<double>>(t2 - t1).count();
-        time_gemm = duration_cast<duration<double>>(t3 - t2).count();
+        time_convert = time_diff(t2, t1);
+        time_gemm = time_diff(t3, t2);
+        std::cout << "conv,nhwc," << F << ',' << H
+                  << ',' << time_convert * 1000
+                  << ',' << time_gemm * 1000
+                  << std::endl;
     }
 
     const tensor_t& rebuild() {
+        // TODO
         return result;
     }
 };
@@ -172,15 +169,7 @@ int main() {
         for (int r = 0; r < 10; r++)
         {
             solver_nchw.compute();
-            std::cout << "conv,nchw," << Co << ',' << HW
-                      << ',' << solver_nchw.time_convert * 1000
-                      << ',' << solver_nchw.time_gemm * 1000
-                      << std::endl;
             solver_nhwc.compute();
-            std::cout << "conv,nhwc," << Co << ',' << HW
-                      << ',' << solver_nhwc.time_convert * 1000
-                      << ',' << solver_nhwc.time_gemm * 1000
-                      << std::endl;
         }
     }
     return 0;
