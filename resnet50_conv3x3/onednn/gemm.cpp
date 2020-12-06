@@ -2,7 +2,8 @@
 #include <fstream>
 #include <iostream>
 #include <cassert>
-#include "mkl.h"
+#include <mkl.h>
+#include <mkl_spblas.h>
 #include "dimidx.hpp"
 #include "tensorutils.hpp"
 using DI::DimIdx;
@@ -143,6 +144,51 @@ struct SolverNHWC {
 
     const tensor_t& rebuild() {
         // TODO
+        return result;
+    }
+};
+
+struct SolverSparse {
+    // NCHW, CSR
+    tensor_t data, scratch, result;
+    sparse_matrix_t weight;
+    int N, C, H, W, F, K;
+
+    SolverSparse(const tensor_t &weight, const DimIdx<4> &dWeight,
+                 const tensor_t &data, const DimIdx<4> &dData)
+        : data(data) {
+        dData.unpack(N, C, H, W);
+        dWeight.unpack(F, DI::None, K, DI::None);
+        assert (dWeight.validate(DI::Any, C, 3, K));
+
+        // sparse weight by every filter
+        int CKK = C * K * K;
+        std::vector<int> pB, pE, colidx;
+        tensor_t vals;
+        for (int jf = 0; jf < F; jf++) {
+            pB.push_back(colidx.size());
+            tensor_t currow(weight.begin() + CKK*jf,
+                            weight.begin() + CKK*jf + CKK);
+            std::sort(currow.begin(), currow.end());
+            auto flag = currow[0.4 * CKK];
+            for (int jckk = 0; jckk < CKK; jckk++) {
+                auto curval = weight[jf * CKK + jckk];
+                if (curval > flag) {
+                    vals.push_back(curval);
+                    colidx.push_back(jckk);
+                }
+            }
+            pE.push_back(colidx.size());
+        }
+        auto status = mkl_sparse_s_create_csr(
+            &this->weight, SPARSE_INDEX_BASE_ZERO, F, CKK,
+            pB.data(), pE.data(), colidx.data(), vals.data());
+        assert(status == SPARSE_STATUS_SUCCESS);
+    }
+    
+    void compute() {}
+
+    const tensor_t& rebuild() {
         return result;
     }
 };
