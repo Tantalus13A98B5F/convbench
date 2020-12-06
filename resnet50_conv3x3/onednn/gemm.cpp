@@ -24,9 +24,11 @@ struct SolverNCHW {
     }
 
     void compute() {
+        auto t1 = steady_clock::now();
         DimIdx<4> dData {N, C, H, W};
         DimIdx<6> dScratch {N, H, W, C, K, K};
-        auto t1 = steady_clock::now();
+        auto aData = dData.bind(data);
+        auto aScratch = dScratch.bind(scratch);
         #pragma omp parallel for
         for (int in = 0; in < N; in++)
         for (int ic = 0; ic < C; ic++)
@@ -38,9 +40,9 @@ struct SolverNCHW {
                 for (int kw = 0; kw < K-1; kw++)
                 {
                     int th = ih + kh - 1, tw = iw + kw - 1;
-                    dScratch(scratch, in, ih, iw, ic, kh, kw) =
+                    aScratch(in, ih, iw, ic, kh, kw) =
                         (th < 0 || th >= H || tw < 0 || tw >= W) ? 0 :
-                        dData(data, in, ic, th, tw);
+                        aData(in, ic, th, tw);
                 }
             }
         }
@@ -160,6 +162,8 @@ struct SolverSparse {
         dData.unpack(N, C, H, W);
         dWeight.unpack(F, DI::None, K, DI::None);
         assert (dWeight.validate(DI::Any, C, 3, K));
+        scratch.resize(dData.totalsize * K * K);
+        result.resize(N * F * H * W);
 
         // sparse weight by every filter
         int CKK = C * K * K;
@@ -186,7 +190,38 @@ struct SolverSparse {
         assert(status == SPARSE_STATUS_SUCCESS);
     }
     
-    void compute() {}
+    void compute() {
+        auto t1 = steady_clock::now();
+        DimIdx<4> dData {N, C, H, W};
+        DimIdx<6> dScratch {N, C, K, K, H, W};
+        auto aData = dData.bind(data);
+        auto aScratch = dScratch.bind(scratch);
+        #pragma omp parallel for
+        for (int in = 0; in < N; in++)
+        for (int ic = 0; ic < C; ic++)
+        {
+            for (int ih = 0; ih < H; ih++)
+            for (int iw = 0; iw < W; iw++)
+            {
+                for (int kh = 0; kh < K-1; kh++)
+                for (int kw = 0; kw < K-1; kw++)
+                {
+                    int th = ih + kh - 1, tw = iw + kw - 1;
+                    aScratch(in, ic, kh, kw, ih, iw) =
+                        (th < 0 || th >= H || tw < 0 || tw >= W) ? 0 :
+                        aData(in, ic, th, tw);
+                }
+            }
+        }
+        auto t2 = steady_clock::now();
+        for (int in = 0; in < N; in++) {
+            mkl_sparse_s_mm(SPARSE_OPERATION_NON_TRANSPOSE, 1, weight,
+                SPARSE_MATRIX_TYPE_GENERAL, SPARSE_LAYOUT_ROW_MAJOR,
+                scratch.data() + in * CKK * HW, HW, HW,
+                0, result.data() + in * F * HW, HW);
+        }
+        auto t3 = steady_clock::now();
+    }
 
     const tensor_t& rebuild() {
         return result;
