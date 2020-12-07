@@ -13,8 +13,8 @@ struct SolverNCHW {
     int N, C, H, W, F, K;
     double time_convert, time_gemm;
 
-    SolverNCHW(const tensor_t &weight, const tensor_t &data,
-               const DimIdx<4> &dWeight, const DimIdx<4> &dData)
+    SolverNCHW(const tensor_t &weight, const DimIdx<4> &dWeight, 
+               const tensor_t &data, const DimIdx<4> &dData)
         : weight(weight), data(data), time_convert(0), time_gemm(0) {
         dData.unpack(N, C, H, W);
         dWeight.unpack(F, DI::None, K, DI::None);
@@ -73,8 +73,8 @@ struct SolverNHWC {
     int N, C, H, W, F, K;
     double time_convert, time_gemm;
 
-    SolverNHWC(const tensor_t &weight, const tensor_t &data,
-               const DimIdx<4> &dWeight, const DimIdx<4> &dData)
+    SolverNHWC(const tensor_t &weight, const DimIdx<4> &dWeight, 
+               const tensor_t &data, const DimIdx<4> &dData)
         : time_convert(0), time_gemm(0) {
         // unpack & check
         dData.unpack(N, C, H, W);
@@ -152,9 +152,11 @@ struct SolverNHWC {
 
 struct SolverSparse {
     // NCHW, CSR
-    tensor_t data, scratch, result;
+    tensor_t data, scratch, result, wvals;
+    std::vector<int> ptrB, ptrE, wcols;
     sparse_matrix_t weight;
     int N, C, H, W, F, K;
+    double time_convert, time_gemm;
 
     SolverSparse(const tensor_t &weight, const DimIdx<4> &dWeight,
                  const tensor_t &data, const DimIdx<4> &dData)
@@ -167,26 +169,24 @@ struct SolverSparse {
 
         // sparse weight by every filter
         int CKK = C * K * K;
-        std::vector<int> pB, pE, colidx;
-        tensor_t vals;
         for (int jf = 0; jf < F; jf++) {
-            pB.push_back(colidx.size());
+            ptrB.push_back(wcols.size());
             tensor_t currow(weight.begin() + CKK*jf,
                             weight.begin() + CKK*jf + CKK);
             std::sort(currow.begin(), currow.end());
-            auto flag = currow[0.4 * CKK];
+            auto flag = currow[0.8 * CKK];
             for (int jckk = 0; jckk < CKK; jckk++) {
                 auto curval = weight[jf * CKK + jckk];
                 if (curval > flag) {
-                    vals.push_back(curval);
-                    colidx.push_back(jckk);
+                    wvals.push_back(curval);
+                    wcols.push_back(jckk);
                 }
             }
-            pE.push_back(colidx.size());
+            ptrE.push_back(wcols.size());
         }
         auto status = mkl_sparse_s_create_csr(
             &this->weight, SPARSE_INDEX_BASE_ZERO, F, CKK,
-            pB.data(), pE.data(), colidx.data(), vals.data());
+            ptrB.data(), ptrE.data(), wcols.data(), wvals.data());
         assert(status == SPARSE_STATUS_SUCCESS);
     }
     
@@ -214,13 +214,21 @@ struct SolverSparse {
             }
         }
         auto t2 = steady_clock::now();
+        int CKK = C * K * K, HW = H * W;
         for (int in = 0; in < N; in++) {
-            mkl_sparse_s_mm(SPARSE_OPERATION_NON_TRANSPOSE, 1, weight,
-                SPARSE_MATRIX_TYPE_GENERAL, SPARSE_LAYOUT_ROW_MAJOR,
+            auto status = mkl_sparse_s_mm(SPARSE_OPERATION_NON_TRANSPOSE, 1, weight,
+                {SPARSE_MATRIX_TYPE_GENERAL}, SPARSE_LAYOUT_ROW_MAJOR,
                 scratch.data() + in * CKK * HW, HW, HW,
                 0, result.data() + in * F * HW, HW);
+            assert (status == SPARSE_STATUS_SUCCESS);
         }
         auto t3 = steady_clock::now();
+        time_convert = time_diff(t2, t1);
+        time_gemm = time_diff(t3, t2);
+        std::cout << "conv,sparse.8," << F << ',' << H
+                  << ',' << time_convert * 1000
+                  << ',' << time_gemm * 1000
+                  << std::endl;
     }
 
     const tensor_t& rebuild() {
@@ -243,14 +251,17 @@ int main() {
         total = Co * Ci * Kh * Kw;
         tensor_t weight(total);
         read_binary(weightfile, weight);
-        SolverNCHW solver_nchw(weight, indata,
-                {Co, Ci, Kh, Kw}, {nbatch, Ci, HW, HW});
-        SolverNHWC solver_nhwc(weight, indata,
-                {Co, Ci, Kh, Kw}, {nbatch, Ci, HW, HW});
+        SolverNCHW solver_nchw(
+            weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW, HW});
+        SolverNHWC solver_nhwc(
+            weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW, HW});
+        SolverSparse solver_sparse(
+            weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW, HW});
         for (int r = 0; r < 10; r++)
         {
             solver_nchw.compute();
             solver_nhwc.compute();
+            solver_sparse.compute();
         }
     }
     return 0;
