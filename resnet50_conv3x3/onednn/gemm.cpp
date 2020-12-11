@@ -64,7 +64,7 @@ struct SolverNCHW {
 };
 
 struct SolverNHWC {
-    tensor_t weight, data, scratch, result;
+    tensor_t weight, data, scratch, result, nchwresult;
     int N, C, H, W, F, K;
     double time_convert, time_gemm;
 
@@ -84,10 +84,8 @@ struct SolverNHWC {
         DimIdx<4> dData2 {N, H2, W2, C}, dWeight2 {F, K, K, C};
         auto aData = dData.bind(data);
         auto aWeight = dWeight.bind(weight);
-        auto aData2 = dData2.bind(this->data);
-        auto aWeight2 = dWeight2.bind(this->weight);
-        this->data.resize(dData2.totalsize);
-        this->weight.resize(dWeight2.totalsize);
+        auto aData2 = dData2.bind<true>(this->data);
+        auto aWeight2 = dWeight2.bind<true>(this->weight);
 
         for (int in = 0; in < N; in++)
         for (int ic = 0; ic < C; ic++)
@@ -134,8 +132,15 @@ struct SolverNHWC {
     }
 
     const tensor_t& rebuild() {
-        // TODO
-        return result;
+        DimIdx<4> dNHWC {N, H, W, F}, dNCHW {N, F, H, W};
+        auto aNHWC = dNHWC.bind(result);
+        auto aNCHW = dNCHW.bind<true>(nchwresult);
+        for (int in = 0; in < N; in++)
+        for (int ih = 0; ih < H; ih++)
+        for (int iw = 0; iw < W; iw++)
+        for (int ic = 0; ic < F; ic++)
+            aNCHW(in, ic, ih, iw) = aNHWC(in, ih, iw, ic);
+        return nchwresult;
     }
 };
 
@@ -247,6 +252,10 @@ int main() {
             solver_nhwc.compute();
             solver_sparse.compute();
         }
+        auto retA = solver_nchw.rebuild();
+        auto retB = solver_nhwc.rebuild();
+        float diff = square_diff(retA, retB);
+        std::cout << "diff = " << diff << std::endl;
     }
     return 0;
 }

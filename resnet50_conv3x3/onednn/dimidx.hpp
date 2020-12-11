@@ -57,6 +57,21 @@ struct refElem<contTy, true> {
 };
 
 
+// struct resizeCont
+
+template <typename contTy, bool resize>
+struct resizeCont {
+    resizeCont(contTy &cont, size_t size) {
+        cont.resize(size);
+    }
+};
+
+template <typename contTy>
+struct resizeCont<contTy, false> {
+    resizeCont(contTy &cont, size_t size) { }
+};
+
+
 // strcut DimIdx
 
 template <int Dim>
@@ -109,8 +124,9 @@ struct DimIdx {
         }
     };
 
-    template <typename contTy>
+    template <bool resize=false, typename contTy>
     Accessor<contTy> bind(contTy &cont) const {
+        resizeCont<contTy, resize>(cont, totalsize);
         return Accessor<contTy>(*this, cont);
     }
 };
