@@ -88,6 +88,9 @@ struct DimIdx {
     DimIdx(initializer_list<size_t>::iterator it)
         : range(*it), sub(it+1), stride(sub.totalsize), totalsize(stride * range) { }
 
+    DimIdx(const DimIdx<Dim> &rhs)
+        : range(rhs.range), sub(rhs.sub), stride(rhs.stride), totalsize(rhs.totalsize) {}
+
     template <typename First, typename... Args>
     size_t idx(First cur, Args... args) const {
         return cur * stride + sub.idx(args...);
@@ -112,7 +115,7 @@ struct DimIdx {
 
     template <typename contTy>
     struct Accessor {
-        const DimIdx<Dim> &dim;
+        const DimIdx<Dim> dim;
         contTy &cont;
 
         Accessor(const DimIdx<Dim> &s, contTy &c)
@@ -136,6 +139,9 @@ struct DimIdx<0> {
     const size_t totalsize;
 
     DimIdx(initializer_list<size_t>::iterator it)
+        : totalsize(1) { }
+
+    DimIdx(const DimIdx<0> &rhs)
         : totalsize(1) { }
 
     size_t idx() const { return 0; }

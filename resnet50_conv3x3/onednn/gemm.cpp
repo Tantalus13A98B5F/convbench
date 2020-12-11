@@ -27,10 +27,8 @@ struct SolverNCHW {
 
     void compute() {
         auto t1 = steady_clock::now();
-        DimIdx<4> dData {N, C, H+2, W+2};
-        DimIdx<6> dScratch {N, H, W, C, K, K};
-        auto aData = dData.bind(data);
-        auto aScratch = dScratch.bind(scratch);
+        auto aData = DimIdx<4>{N, C, H+2, W+2}.bind(data);
+        auto aScratch = DimIdx<6>{N, H, W, C, K, K}.bind(scratch);
         #pragma omp parallel for
         for (int in = 0; in < N; in++)
         for (int ic = 0; ic < C; ic++)
@@ -81,11 +79,10 @@ struct SolverNHWC {
         result.resize(N * F * H * W);
     
         // convert payload
-        DimIdx<4> dData2 {N, H2, W2, C}, dWeight2 {F, K, K, C};
         auto aData = dData.bind(data);
         auto aWeight = dWeight.bind(weight);
-        auto aData2 = dData2.bind<true>(this->data);
-        auto aWeight2 = dWeight2.bind<true>(this->weight);
+        auto aData2 = DimIdx<4>{N, H2, W2, C}.bind<true>(this->data);
+        auto aWeight2 = DimIdx<4>{F, K, K, C}.bind<true>(this->weight);
 
         for (int in = 0; in < N; in++)
         for (int ic = 0; ic < C; ic++)
@@ -102,10 +99,8 @@ struct SolverNHWC {
 
     void compute() {
         auto t1 = steady_clock::now();
-        DimIdx<4> dData {N, H+2, W+2, C};
-        DimIdx<6> dScratch {N, H, W, K, K, C};
-        auto aScratch = dScratch.bind(scratch);
-        auto aData = dData.bind(data);
+        auto aScratch = DimIdx<6>{N, H, W, K, K, C}.bind(scratch);
+        auto aData = DimIdx<4>{N, H+2, W+2, C}.bind(data);
         #pragma omp parallel for
         for (int in = 0; in < N; in++)
         for (int ih = 0; ih < H; ih++)
@@ -132,9 +127,8 @@ struct SolverNHWC {
     }
 
     const tensor_t& rebuild() {
-        DimIdx<4> dNHWC {N, H, W, F}, dNCHW {N, F, H, W};
-        auto aNHWC = dNHWC.bind(result);
-        auto aNCHW = dNCHW.bind<true>(nchwresult);
+        auto aNHWC = DimIdx<4>{N, H, W, F}.bind(result);
+        auto aNCHW = DimIdx<4>{N, F, H, W}.bind<true>(nchwresult);
         for (int in = 0; in < N; in++)
         for (int ih = 0; ih < H; ih++)
         for (int iw = 0; iw < W; iw++)
