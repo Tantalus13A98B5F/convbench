@@ -16,36 +16,30 @@ struct SolverNCHW {
     SolverNCHW(const tensor_t &weight, const DimIdx<4> &dWeight, 
                const tensor_t &data, const DimIdx<4> &dData)
         : weight(weight), data(data), time_convert(0), time_gemm(0) {
-        dData.unpack(N, C, H, W);
+        int H2, W2;
+        dData.unpack(N, C, H2, W2);
+        H = H2 - 2; W = W2 - 2;
         dWeight.unpack(F, DI::None, K, DI::None);
         assert (dWeight.validate(DI::Any, C, 3, K));
-        scratch.resize(dData.totalsize * K * K);
+        scratch.resize(N*H*W * C*K*K);
         result.resize(N * F * H * W);
     }
 
     void compute() {
         auto t1 = steady_clock::now();
-        DimIdx<4> dData {N, C, H, W};
+        DimIdx<4> dData {N, C, H+2, W+2};
         DimIdx<6> dScratch {N, H, W, C, K, K};
         auto aData = dData.bind(data);
         auto aScratch = dScratch.bind(scratch);
         #pragma omp parallel for
         for (int in = 0; in < N; in++)
         for (int ic = 0; ic < C; ic++)
-        {
-            for (int ih = 0; ih < H; ih++)
-            for (int iw = 0; iw < W; iw++)
-            {
-                for (int kh = 0; kh < K-1; kh++)
-                for (int kw = 0; kw < K-1; kw++)
-                {
-                    int th = ih + kh - 1, tw = iw + kw - 1;
-                    aScratch(in, ih, iw, ic, kh, kw) =
-                        (th < 0 || th >= H || tw < 0 || tw >= W) ? 0 :
-                        aData(in, ic, th, tw);
-                }
-            }
-        }
+        for (int ih = 0; ih < H; ih++)
+        for (int iw = 0; iw < W; iw++)
+        for (int kh = 0; kh < K; kh++)
+        for (int kw = 0; kw < K; kw++)
+            aScratch(in, ih, iw, ic, kh, kw) = aData(in, ic, ih + kh, iw + kw);
+
         auto t2 = steady_clock::now();
         int CKK = C * K * K, HW = H * W;
         for (int in = 0; in < N; in++) {
@@ -54,6 +48,7 @@ struct SolverNCHW {
                     scratch.data() + in * CKK * HW, CKK,
                     0, result.data() + in * F * HW, HW);
         }
+    
         auto t3 = steady_clock::now();
         time_convert = time_diff(t2, t1);
         time_gemm = time_diff(t3, t2);
@@ -77,26 +72,27 @@ struct SolverNHWC {
                const tensor_t &data, const DimIdx<4> &dData)
         : time_convert(0), time_gemm(0) {
         // unpack & check
-        dData.unpack(N, C, H, W);
+        int H2, W2;
+        dData.unpack(N, C, H2, W2);
+        H = H2 - 2; W = W2 - 2;
         dWeight.unpack(F, DI::None, K, DI::None);
         assert (dWeight.validate(DI::Any, C, 3, K));
+        scratch.resize(N*H*W * C*K*K);
+        result.resize(N * F * H * W);
     
         // convert payload
-        DimIdx<4> dData2 {N, H, W, C}, dWeight2 {F, K, K, C};
+        DimIdx<4> dData2 {N, H2, W2, C}, dWeight2 {F, K, K, C};
         auto aData = dData.bind(data);
         auto aWeight = dWeight.bind(weight);
         auto aData2 = dData2.bind(this->data);
         auto aWeight2 = dWeight2.bind(this->weight);
-
-        this->data.resize(dData.totalsize);
-        this->weight.resize(dWeight.totalsize);
-        scratch.resize(dData.totalsize * K * K);
-        result.resize(N * F * H * W);
+        this->data.resize(dData2.totalsize);
+        this->weight.resize(dWeight2.totalsize);
 
         for (int in = 0; in < N; in++)
         for (int ic = 0; ic < C; ic++)
-        for (int ih = 0; ih < H; ih++)
-        for (int iw = 0; iw < W; iw++)
+        for (int ih = 0; ih < H2; ih++)
+        for (int iw = 0; iw < W2; iw++)
             aData2(in, ih, iw, ic) = aData(in, ic, ih, iw);
 
         for (int jf = 0; jf < F; jf++)
@@ -107,34 +103,27 @@ struct SolverNHWC {
     }
 
     void compute() {
-        DimIdx<4> dData {N, H, W, C};
+        auto t1 = steady_clock::now();
+        DimIdx<4> dData {N, H+2, W+2, C};
         DimIdx<6> dScratch {N, H, W, K, K, C};
         auto aScratch = dScratch.bind(scratch);
         auto aData = dData.bind(data);
-        auto t1 = steady_clock::now();
         #pragma omp parallel for
         for (int in = 0; in < N; in++)
         for (int ih = 0; ih < H; ih++)
         for (int iw = 0; iw < W; iw++)
-        {
-            for (int kh = 0; kh < K-1; kh++)
-            for (int kw = 0; kw < K-1; kw++)
-            {
-                int th = ih + kh - 1, tw = iw + kw - 1;
-                for (int ic = 0; ic < C; ic++)
-                {
-                    aScratch(in, ih, iw, kh, kw, ic) =
-                        (th < 0 || th >= H || tw < 0 || tw >= W) ? 0 :
-                        aData(in, th, tw, ic);
-                }
-            }
-        }
+        for (int kh = 0; kh < K; kh++)
+        for (int kw = 0; kw < K; kw++)
+        for (int ic = 0; ic < C; ic++)
+            aScratch(in, ih, iw, kh, kw, ic) = aData(in, ih + kh, iw + kw, ic);
+
         auto t2 = steady_clock::now();
         int CKK = C * K * K, NHW = N * H * W;
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                 NHW, F, CKK, 1, scratch.data(), CKK,
                 weight.data(), CKK,
                 0, result.data(), F);
+
         auto t3 = steady_clock::now();
         time_convert = time_diff(t2, t1);
         time_gemm = time_diff(t3, t2);
@@ -161,10 +150,12 @@ struct SolverSparse {
     SolverSparse(const tensor_t &weight, const DimIdx<4> &dWeight,
                  const tensor_t &data, const DimIdx<4> &dData)
         : data(data) {
-        dData.unpack(N, C, H, W);
+        int H2, W2;
+        dData.unpack(N, C, H2, W2);
+        H = H2 - 2; W = W2 - 2;
         dWeight.unpack(F, DI::None, K, DI::None);
         assert (dWeight.validate(DI::Any, C, 3, K));
-        scratch.resize(dData.totalsize * K * K);
+        scratch.resize(N*H*W * C*K*K);
         result.resize(N * F * H * W);
 
         // sparse weight by every filter
@@ -192,27 +183,19 @@ struct SolverSparse {
     
     void compute() {
         auto t1 = steady_clock::now();
-        DimIdx<4> dData {N, C, H, W};
+        DimIdx<4> dData {N, C, H+2, W+2};
         DimIdx<6> dScratch {N, C, K, K, H, W};
         auto aData = dData.bind(data);
         auto aScratch = dScratch.bind(scratch);
         #pragma omp parallel for
         for (int in = 0; in < N; in++)
         for (int ic = 0; ic < C; ic++)
-        {
-            for (int ih = 0; ih < H; ih++)
-            for (int iw = 0; iw < W; iw++)
-            {
-                for (int kh = 0; kh < K-1; kh++)
-                for (int kw = 0; kw < K-1; kw++)
-                {
-                    int th = ih + kh - 1, tw = iw + kw - 1;
-                    aScratch(in, ic, kh, kw, ih, iw) =
-                        (th < 0 || th >= H || tw < 0 || tw >= W) ? 0 :
-                        aData(in, ic, th, tw);
-                }
-            }
-        }
+        for (int ih = 0; ih < H; ih++)
+        for (int iw = 0; iw < W; iw++)
+        for (int kh = 0; kh < K; kh++)
+        for (int kw = 0; kw < K; kw++)
+            aScratch(in, ic, kh, kw, ih, iw) = aData(in, ic, ih + kh, iw + kw);
+
         auto t2 = steady_clock::now();
         int CKK = C * K * K, HW = H * W;
         for (int in = 0; in < N; in++) {
@@ -222,6 +205,7 @@ struct SolverSparse {
                 0, result.data() + in * F * HW, HW);
             assert (status == SPARSE_STATUS_SUCCESS);
         }
+
         auto t3 = steady_clock::now();
         time_convert = time_diff(t2, t1);
         time_gemm = time_diff(t3, t2);
@@ -242,7 +226,7 @@ int main() {
     int cnt_data_sets;
     infmt >> cnt_data_sets;
     int nbatch = 10;
-    tensor_t indata(nbatch * 64 * 256 * 256);
+    tensor_t indata(nbatch * 64 * 258 * 258);  // padded
     init_rand(indata);
     for (int i = 0; i < cnt_data_sets; i++) {
         int Co, Ci, Kh, Kw, total, HW;
@@ -252,11 +236,11 @@ int main() {
         tensor_t weight(total);
         read_binary(weightfile, weight);
         SolverNCHW solver_nchw(
-            weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW, HW});
+            weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW+2, HW+2});
         SolverNHWC solver_nhwc(
-            weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW, HW});
+            weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW+2, HW+2});
         SolverSparse solver_sparse(
-            weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW, HW});
+            weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW+2, HW+2});
         for (int r = 0; r < 10; r++)
         {
             solver_nchw.compute();

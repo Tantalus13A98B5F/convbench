@@ -3,11 +3,11 @@
 #include <fstream>
 #include <iostream>
 #include <random>
-#include "dnnl.hpp"
+#include <dnnl.hpp>
+#include "tensorutils.hpp"
 using namespace dnnl;
 
 typedef std::unordered_map<int, memory> primargs_t;
-typedef std::vector<float> tensor_t;
 
 template <typename dtype>
 void write_to_dnnl_memory(dtype *handle, dnnl::memory &mem) {
@@ -110,10 +110,7 @@ int main() {
     infmt >> cnt_data_sets;
     int nbatch = 10;
     tensor_t indata(nbatch * 64 * 256 * 256);
-    std::minstd_rand0 randgen(0);
-    for (int i = 0; i < indata.size(); i++) {
-        indata[i] = randgen();
-    }
+    init_rand(indata);
     runner robj;
     for (int i = 0; i < cnt_data_sets; i++) {
         int Co, Ci, Kh, Kw, total, HW;
@@ -121,7 +118,7 @@ int main() {
         HW = 64 * 256 / Co;
         total = Co * Ci * Kh * Kw;
         tensor_t weight(total);
-        weightfile.read((char*) weight.data(), total * sizeof(tensor_t::value_type));
+        read_binary(weightfile, weight);
         robj.test_conv(nbatch, Co, HW, weight, indata);
     }
     robj.exec(10);
