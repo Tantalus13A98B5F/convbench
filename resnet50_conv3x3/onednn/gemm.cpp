@@ -8,6 +8,32 @@
 #include "tensorutils.hpp"
 using DI::DimIdx;
 
+void my_sgemm(int M, int N, int K, float alpha,
+              float *mA, int sA, float *mB, int sB,
+              float beta, float *mC, int sC) {
+    if (alpha == 1 && beta == 0) {
+        #pragma omp parallel for
+        for (int im = 0; im < M; im++)
+        for (int in = 0; in < N; in++) {
+            float acc = 0;
+            for (int ik = 0; ik < K; ik++) {
+                acc += mA[im * sA + ik] * mB[in * sB + ik];
+            }
+            mC[im * sC + in] = acc;
+        }
+    } else {
+        #pragma omp parallel for
+        for (int im = 0; im < M; im++)
+        for (int in = 0; in < N; in++) {
+            float acc = 0;
+            for (int ik = 0; ik < K; ik++) {
+                acc += mA[im * sA + ik] * mB[in * sB + ik];
+            }
+            mC[im * sC + in] = alpha * acc + beta * mC[im * sC + in];
+        }
+    }
+}
+
 struct SolverNCHW {
     tensor_t weight, data, scratch, result;
     int N, C, H, W, F, K;
@@ -41,7 +67,8 @@ struct SolverNCHW {
         auto t2 = steady_clock::now();
         int CKK = C * K * K, HW = H * W;
         for (int in = 0; in < N; in++) {
-            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+            // cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+            my_sgemm(
                     F, HW, CKK, 1, weight.data(), CKK,
                     scratch.data() + in * CKK * HW, CKK,
                     0, result.data() + in * F * HW, HW);
@@ -112,7 +139,8 @@ struct SolverNHWC {
 
         auto t2 = steady_clock::now();
         int CKK = C * K * K, NHW = N * H * W;
-        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+        // cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+        my_sgemm(
                 NHW, F, CKK, 1, scratch.data(), CKK,
                 weight.data(), CKK,
                 0, result.data(), F);
@@ -249,7 +277,7 @@ int main() {
         auto retA = solver_nchw.rebuild();
         auto retB = solver_nhwc.rebuild();
         float diff = square_diff(retA, retB);
-        std::cout << "diff = " << diff << std::endl;
+        std::cout << "diff," << diff << std::endl;
     }
     return 0;
 }
