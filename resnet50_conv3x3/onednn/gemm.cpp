@@ -77,7 +77,7 @@ struct SolverNCHW {
         auto t3 = steady_clock::now();
         time_convert = time_diff(t2, t1);
         time_gemm = time_diff(t3, t2);
-        std::cout << "conv,nchw," << F << ',' << H
+        std::cout << "conv,nchw,0," << F << ',' << H
                   << ',' << time_convert * 1000
                   << ',' << time_gemm * 1000
                   << std::endl;
@@ -148,7 +148,7 @@ struct SolverNHWC {
         auto t3 = steady_clock::now();
         time_convert = time_diff(t2, t1);
         time_gemm = time_diff(t3, t2);
-        std::cout << "conv,nhwc," << F << ',' << H
+        std::cout << "conv,nhwc,0," << F << ',' << H
                   << ',' << time_convert * 1000
                   << ',' << time_gemm * 1000
                   << std::endl;
@@ -173,10 +173,11 @@ struct SolverSparse {
     sparse_matrix_t weight;
     int N, C, H, W, F, K;
     double time_convert, time_gemm;
+    float sparsity;
 
     SolverSparse(const tensor_t &weight, const DimIdx<4> &dWeight,
-                 const tensor_t &data, const DimIdx<4> &dData)
-        : data(data) {
+                 const tensor_t &data, const DimIdx<4> &dData, float sparsity)
+        : data(data), sparsity(sparsity) {
         int H2, W2;
         dData.unpack(N, C, H2, W2);
         H = H2 - 2; W = W2 - 2;
@@ -192,7 +193,7 @@ struct SolverSparse {
             tensor_t currow(weight.begin() + CKK*jf,
                             weight.begin() + CKK*jf + CKK);
             std::sort(currow.begin(), currow.end());
-            auto flag = currow[0.8 * CKK];
+            auto flag = currow[sparsity * CKK];
             for (int jckk = 0; jckk < CKK; jckk++) {
                 auto curval = weight[jf * CKK + jckk];
                 if (curval > flag) {
@@ -236,7 +237,7 @@ struct SolverSparse {
         auto t3 = steady_clock::now();
         time_convert = time_diff(t2, t1);
         time_gemm = time_diff(t3, t2);
-        std::cout << "conv,sparse.8," << F << ',' << H
+        std::cout << "conv,sparse," << sparsity << ',' << F << ',' << H
                   << ',' << time_convert * 1000
                   << ',' << time_gemm * 1000
                   << std::endl;
@@ -266,13 +267,19 @@ int main() {
             weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW+2, HW+2});
         SolverNHWC solver_nhwc(
             weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW+2, HW+2});
-        SolverSparse solver_sparse(
-            weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW+2, HW+2});
+        SolverSparse *solver_sparse[5];
+        for (int i = 0; i < 5; i++) {
+            solver_sparse[i] = new SolverSparse(
+                weight, {Co, Ci, Kh, Kw}, indata, {nbatch, Ci, HW+2, HW+2},
+                0.35 + i * 0.15
+            );
+        }
         for (int r = 0; r < 10; r++)
         {
             solver_nchw.compute();
             solver_nhwc.compute();
-            solver_sparse.compute();
+            for (int i = 0; i < 5; i++)
+                solver_sparse[i]->compute();
         }
         auto retA = solver_nchw.rebuild();
         auto retB = solver_nhwc.rebuild();
