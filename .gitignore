@@ -1,5 +1,6 @@
 *.dat
 perf.data*
+.tags
 *.cfg
 *.pdf
 *.png

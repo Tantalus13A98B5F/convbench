@@ -152,5 +152,45 @@ struct DimIdx<0> {
 };
 
 
+// class Range
+
+template <typename dtype = std::size_t, int stepLen = 1>
+struct Range {
+    const dtype start, stop;
+
+    Range(dtype start, dtype stop)
+        : start(start), stop(stop) { }
+
+    class iterator {
+        dtype val;
+
+    public:
+        iterator(dtype v): val(v) {}
+
+        bool operator!=(const iterator& rhs) const {
+            return val != rhs.val;
+        }
+
+        void operator++() { val += stepLen; }
+
+        dtype operator*() const { return val; }
+    };
+
+    iterator begin() const {
+        return iterator(start);
+    }
+
+    iterator end() const {
+        dtype tmp = stop + stepLen - 1;
+        return iterator(tmp - tmp % stepLen);
+    }
+
+    template <int newStepLen>
+    auto stepBy() -> Range<dtype, newStepLen> {
+        return Range<dtype, newStepLen>(start, stop);
+    }
+};
+
+
 }  // end namespace
 #endif  // _DIMIDX_HPP_
