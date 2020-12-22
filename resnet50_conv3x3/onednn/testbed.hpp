@@ -1,5 +1,30 @@
+#ifndef _TESTBED_H_
+#define _TESTBED_H_
 #include "dimidx.hpp"
 #include "tensorutils.hpp"
+#include <memory>
+#include <mkl.h>
+#include <mkl_spblas.h>
+using DI::Range;
+using DI::DimIdx;
+
+
+class CaseProvider {
+    const tensor_t &data, &weight;
+    DimIdx<4> dData, dWeight;
+
+public:
+    CaseProvider(const tensor_t &data,   const DimIdx<4> &dData,
+                 const tensor_t &weight, const DimIdx<4> &dWeight)
+        : data(data), weight(weight), dData(dData), dWeight(dWeight)
+    {}
+
+    template <typename ConvClass>
+    std::unique_ptr<ConvClass> newConv() {
+        return std::unique_ptr<ConvClass>(
+            new ConvClass(data, dData, weight, dWeight));
+    }
+};
 
 
 class NCHWDirectConv {
@@ -7,11 +32,11 @@ protected:
     int N, C, H, W, F, K;
     tensor_t data, weight, result;
 
-    const char* fmt() { return "NCHW"; }
-    const char* alg() { return "direct"; }
-    const char* impl() { return "raw"; }
-    const char* spfmt() { return "none"; }
-    float sparsity() { return 0; }
+    virtual const char* fmt() { return "NCHW"; }
+    virtual const char* alg() { return "direct"; }
+    virtual const char* impl() { return "raw"; }
+    virtual const char* spfmt() { return "none"; }
+    virtual float sparsity() { return 0; }
 
     void check_size(const DimIdx<4> &dData, const DimIdx<4> &dWeight) {
         dData.unpack(N, C, H, W);
@@ -20,13 +45,13 @@ protected:
         size_alloc();
     }
 
-    void size_alloc() {
+    virtual void size_alloc() {
         result.resize(N * F * H * W);
     }
 
-    void format_convert(const tensor_t &data, const tensor_t &weight) {
-        auto aOrig = DI::DimIdx<4>{N, C, H, W}.bind(data);
-        auto aNew = DI::DimIdx<4>{N, C, H+2, W+2}.bind<true>(this->data);
+    virtual void format_convert(const tensor_t &data, const tensor_t &weight) {
+        auto aOrig = DimIdx<4>{N, C, H, W}.bind(data);
+        auto aNew = DimIdx<4>{N, C, H+2, W+2}.bind<true>(this->data);
         for (auto in: Range<>(0, N))
         for (auto ic: Range<>(0, C))
         for (auto ih: Range<>(0, H))
@@ -36,12 +61,12 @@ protected:
         this->weight = weight;
     }
 
-    void im2col() {}
+    virtual void im2col() {}
 
-    void compute_kernel() {
-        auto aData = DI::DimIdx<4>{N, C, H+2, W+2}.bind(data);
-        auto aWeight = DI::DimIdx<4>{F, C, K, K}.bind(weight);
-        auto aRet = DI::DimIdx<4>{N, F, H, W}.bind(result);
+    virtual void compute_kernel() {
+        auto aData = DimIdx<4>{N, C, H+2, W+2}.bind(data);
+        auto aWeight = DimIdx<4>{F, C, K, K}.bind(weight);
+        auto aRet = DimIdx<4>{N, F, H, W}.bind(result);
         for (auto in: Range<>(0, N))
         for (auto jf: Range<>(0, F))
         for (auto ih: Range<>(0, H))
@@ -59,8 +84,8 @@ protected:
     }
 
 public:
-    NCHWDirectConv(const tensor_t &data,   const DI::DimIdx<4> &dData,
-                   const tensor_t &weight, const DI::DimIdx<4> &dWeight)
+    NCHWDirectConv(const tensor_t &data,   const DimIdx<4> &dData,
+                   const tensor_t &weight, const DimIdx<4> &dWeight)
     {
         check_size(dData, dWeight);
         format_convert(data, weight);
@@ -77,13 +102,13 @@ public:
         auto time_convert = time_diff(t2, t1) * 1000;
         auto time_compute = time_diff(t3, t2) * 1000;
         std::cout << "conv," << fmt() << ',' << alg() << ',' << impl()
-                  << ',' << spfmt() << ',' << sparisity()
+                  << ',' << spfmt() << ',' << sparsity()
                   << ',' << F << ',' << H
                   << ',' << time_convert << ',' << time_compute
                   << std::endl;
     }
 
-    tensor_t result() {
+    virtual tensor_t get_result() {
         return result;
     }
 };
@@ -122,6 +147,9 @@ protected:
                     0, result.data() + in * F * HW, HW);
         }
     }
+
+public:
+    using NCHWDirectConv::NCHWDirectConv;
 };
 
 
@@ -130,16 +158,16 @@ protected:
     const char* fmt() { return "NHWc"; }
 
     void format_convert(const tensor_t &data, const tensor_t &weight) {
-        auto dOrig = DI::DimIdx<4>{N, C, H, W}.bind(data);
-        auto dNew = DI::DimIdx<4>{N, H+2, W+2, C}.bind<true>(this->data);
+        auto dOrig = DimIdx<4>{N, C, H, W}.bind(data);
+        auto dNew = DimIdx<4>{N, H+2, W+2, C}.bind<true>(this->data);
         for (auto in: Range<>(0, N))
         for (auto ic: Range<>(0, C))
         for (auto ih: Range<>(0, H))
         for (auto iw: Range<>(0, W))
             dNew(in, ih, iw, ic) = dOrig(in, ic, ih, iw);
         
-        auto wOrig = DI::DimIdx<4>{F, C, K, K}.bind(weight);
-        auto wNew = DI::DimIdx<4>{F, K, K, C}.bind<true>(this->weight);
+        auto wOrig = DimIdx<4>{F, C, K, K}.bind(weight);
+        auto wNew = DimIdx<4>{F, K, K, C}.bind<true>(this->weight);
         for (auto jf: Range<>(0, F))
         for (auto ic: Range<>(0, C))
         for (auto kh: Range<>(0, K))
@@ -168,7 +196,9 @@ protected:
     }
 
 public:
-    tensor_t result() {
+    using NCHWMklGemmConv::NCHWMklGemmConv;
+
+    tensor_t get_result() {
         tensor_t nchwresult;
         auto aNHWC = DimIdx<4>{N, H, W, F}.bind(result);
         auto aNCHW = DimIdx<4>{N, F, H, W}.bind<true>(nchwresult);
@@ -200,7 +230,7 @@ protected:
         for (auto kh: Range<>(0, K))
         for (auto kw: Range<>(0, K))
         for (auto ic: Range<>(0, C))
-            aScratch(in, ih, iw, kh, kw, ic) = aData(in, ih + kh, iw + kw, ic);
+            aScratch(in, ic, ih, iw, kh, kw) = aData(in, ic, ih + kh, iw + kw);
     }
 
     void compute_kernel() {
@@ -215,6 +245,8 @@ protected:
     }
 
 public:
+    using NCHWMklGemmConv::NCHWMklGemmConv;
+
     void sparsity(float s) {
         sprate = s;
         spweight.reset(new sparse_matrix_t());
@@ -242,3 +274,5 @@ public:
         assert(status == SPARSE_STATUS_SUCCESS);
     }
 };
+
+#endif  // _TESTBED_H_

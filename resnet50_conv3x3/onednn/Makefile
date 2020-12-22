@@ -12,7 +12,7 @@ all: ${TARGETS}
 onednn.x: onednn.cpp tensorutils.hpp
 	${CXX} ${CFLAGS} ${DNNLCF} $< -o $@ ${DNNLLD}
 
-gemm.x: gemm.cpp tensorutils.hpp dimidx.hpp
+gemm.x: gemm.cpp tensorutils.hpp dimidx.hpp testbed.hpp
 	${CXX} ${CFLAGS} ${MKLCF} $< -o $@ ${MKLLD}
 
 clean:
