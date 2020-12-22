@@ -9,6 +9,10 @@ using DI::Range;
 using DI::DimIdx;
 
 
+#define CONSTSTR(name,str) const char* name() { return str; }
+#define FOR1(idx, start, stop) for (int idx = start; idx < stop; idx++)
+
+
 class CaseProvider {
     const tensor_t &data, &weight;
     DimIdx<4> dData, dWeight;
@@ -34,10 +38,10 @@ protected:
     int N, C, H, W, F, K;
     tensor_t data, weight, result;
 
-    virtual const char* fmt() { return "NCHW"; }
-    virtual const char* alg() { return "direct"; }
-    virtual const char* impl() { return "raw"; }
-    virtual const char* spfmt() { return "none"; }
+    virtual CONSTSTR(fmt, "NCHW")
+    virtual CONSTSTR(alg, "direct")
+    virtual CONSTSTR(impl, "raw")
+    virtual CONSTSTR(spfmt, "none")
     virtual float sparsity() { return 0; }
 
     virtual void im2col() {}
@@ -46,15 +50,16 @@ protected:
         auto aData = DimIdx<4>{N, C, H+2, W+2}.bind(data);
         auto aWeight = DimIdx<4>{F, C, K, K}.bind(weight);
         auto aRet = DimIdx<4>{N, F, H, W}.bind(result);
-        for (auto in: Range<>(0, N))
-        for (auto jf: Range<>(0, F))
-        for (auto ih: Range<>(0, H))
-        for (auto iw: Range<>(0, W))
+        #pragma omp parallel for collapse(2)
+        FOR1 (in, 0, N)
+        FOR1 (jf, 0, F)
+        FOR1 (ih, 0, H)
+        FOR1 (iw, 0, W)
         {
             tensor_t::value_type sum = 0;
-            for (auto ic: Range<>(0, C))
-            for (auto kh: Range<>(0, K))
-            for (auto kw: Range<>(0, K))
+            FOR1 (ic, 0, C)
+            FOR1 (kh, 0, K)
+            FOR1 (kw, 0, K)
             {
                 sum += aData(in, ic, ih+kh, iw+kw) * aWeight(jf, ic, kh, kw);
             }
@@ -75,10 +80,10 @@ public:
     virtual void prepare_data(const tensor_t &data, const tensor_t &weight) {
         auto aOrig = DimIdx<4>{N, C, H, W}.bind(data);
         auto aNew = DimIdx<4>{N, C, H+2, W+2}.bind<true>(this->data);
-        for (auto in: Range<>(0, N))
-        for (auto ic: Range<>(0, C))
-        for (auto ih: Range<>(0, H))
-        for (auto iw: Range<>(0, W))
+        FOR1 (in, 0, N)
+        FOR1 (ic, 0, C)
+        FOR1 (ih, 0, H)
+        FOR1 (iw, 0, W)
             aNew(in, ic, ih+1, iw+1) = aOrig(in, ic, ih, iw);
         
         this->weight = weight;
@@ -109,24 +114,24 @@ class NCHWMklGemmConv: public NCHWDirectConv {
 protected:
     tensor_t scratch;
 
-    const char* alg() { return "gemm"; }
-    const char* impl() { return "mkl"; }
+    CONSTSTR(alg, "gemm")
+    CONSTSTR(impl, "mkl")
 
     void im2col() {
         auto aData = DimIdx<4>{N, C, H+2, W+2}.bind(data);
         auto aScratch = DimIdx<6>{N, H, W, C, K, K}.bind<true>(scratch);
-        for (auto in: Range<>(0, N))
-        for (auto ic: Range<>(0, C))
-        for (auto ih: Range<>(0, H))
-        for (auto iw: Range<>(0, W))
-        for (auto kh: Range<>(0, K))
-        for (auto kw: Range<>(0, K))
+        FOR1 (in, 0, N)
+        FOR1 (ic, 0, C)
+        FOR1 (ih, 0, H)
+        FOR1 (iw, 0, W)
+        FOR1 (kh, 0, K)
+        FOR1 (kw, 0, K)
             aScratch(in, ih, iw, ic, kh, kw) = aData(in, ic, ih + kh, iw + kw);
     }
 
     void compute_kernel() {
         int CKK = C * K * K, HW = H * W;
-        for (auto in: Range<>(0, N)) {
+        FOR1 (in, 0, N) {
             cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                     F, HW, CKK, 1, weight.data(), CKK,
                     scratch.data() + in * CKK * HW, CKK,
@@ -138,17 +143,17 @@ protected:
 
 class NHWCMklGemmConv: public NCHWMklGemmConv {
 protected:
-    const char* fmt() { return "NHWc"; }
+    CONSTSTR(fmt, "NHWc")
 
     void im2col() {
         auto aScratch = DimIdx<6>{N, H, W, K, K, C}.bind<true>(scratch);
         auto aData = DimIdx<4>{N, H+2, W+2, C}.bind(data);
-        for (auto in: Range<>(0, N))
-        for (auto ih: Range<>(0, H))
-        for (auto iw: Range<>(0, W))
-        for (auto kh: Range<>(0, K))
-        for (auto kw: Range<>(0, K))
-        for (auto ic: Range<>(0, C))
+        FOR1 (in, 0, N)
+        FOR1 (ih, 0, H)
+        FOR1 (iw, 0, W)
+        FOR1 (kh, 0, K)
+        FOR1 (kw, 0, K)
+        FOR1 (ic, 0, C)
             aScratch(in, ih, iw, kh, kw, ic) = aData(in, ih + kh, iw + kw, ic);
     }
 
@@ -164,18 +169,18 @@ public:
     void prepare_data(const tensor_t &data, const tensor_t &weight) {
         auto dOrig = DimIdx<4>{N, C, H, W}.bind(data);
         auto dNew = DimIdx<4>{N, H+2, W+2, C}.bind<true>(this->data);
-        for (auto in: Range<>(0, N))
-        for (auto ic: Range<>(0, C))
-        for (auto ih: Range<>(0, H))
-        for (auto iw: Range<>(0, W))
+        FOR1 (in, 0, N)
+        FOR1 (ic, 0, C)
+        FOR1 (ih, 0, H)
+        FOR1 (iw, 0, W)
             dNew(in, ih+1, iw+1, ic) = dOrig(in, ic, ih, iw);
         
         auto wOrig = DimIdx<4>{F, C, K, K}.bind(weight);
         auto wNew = DimIdx<4>{F, K, K, C}.bind<true>(this->weight);
-        for (auto jf: Range<>(0, F))
-        for (auto ic: Range<>(0, C))
-        for (auto kh: Range<>(0, K))
-        for (auto kw: Range<>(0, K))
+        FOR1 (jf, 0, F)
+        FOR1 (ic, 0, C)
+        FOR1 (kh, 0, K)
+        FOR1 (kw, 0, K)
             wNew(jf, kh, kw, ic) = wOrig(jf, ic, kh, kw);
     }
 
@@ -183,10 +188,10 @@ public:
         tensor_t nchwresult;
         auto aNHWC = DimIdx<4>{N, H, W, F}.bind(result);
         auto aNCHW = DimIdx<4>{N, F, H, W}.bind<true>(nchwresult);
-        for (auto in: Range<>(0, N))
-        for (auto ih: Range<>(0, H))
-        for (auto iw: Range<>(0, W))
-        for (auto ic: Range<>(0, F))
+        FOR1 (in, 0, N)
+        FOR1 (ih, 0, H)
+        FOR1 (iw, 0, W)
+        FOR1 (ic, 0, F)
             aNCHW(in, ic, ih, iw) = aNHWC(in, ih, iw, ic);
         return nchwresult;
     }
@@ -199,24 +204,24 @@ protected:
     tensor_t wvals;
     float sprate;
 
-    const char* spfmt() { return "csr"; }
+    CONSTSTR(spfmt, "csr")
     float sparsity() { return sprate; }
 
     void im2col() {
         auto aScratch = DimIdx<6>{N, C, K, K, H, W}.bind<true>(scratch);
         auto aData = DimIdx<4>{N, C, H+2, W+2}.bind(data);
-        for (auto in: Range<>(0, N))
-        for (auto ih: Range<>(0, H))
-        for (auto iw: Range<>(0, W))
-        for (auto kh: Range<>(0, K))
-        for (auto kw: Range<>(0, K))
-        for (auto ic: Range<>(0, C))
+        FOR1 (in, 0, N)
+        FOR1 (ih, 0, H)
+        FOR1 (iw, 0, W)
+        FOR1 (kh, 0, K)
+        FOR1 (kw, 0, K)
+        FOR1 (ic, 0, C)
             aScratch(in, ic, ih, iw, kh, kw) = aData(in, ic, ih + kh, iw + kw);
     }
 
     void compute_kernel() {
         int CKK = C * K * K, HW = H * W;
-        for (int in = 0; in < N; in++) {
+        FOR1 (in, 0, N) {
             auto status = mkl_sparse_s_mm(SPARSE_OPERATION_NON_TRANSPOSE, 1, *(spweight.get()),
                 {SPARSE_MATRIX_TYPE_GENERAL}, SPARSE_LAYOUT_ROW_MAJOR,
                 scratch.data() + in * CKK * HW, HW, HW,
@@ -232,13 +237,13 @@ public:
         ptrB.clear(); ptrE.clear(); wcols.clear();
         wvals.clear();
         int CKK = C * K * K;
-        for (auto jf: Range<>(0, F)) {
+        FOR1 (jf, 0, F) {
             ptrB.push_back(wcols.size());
             tensor_t currow(weight.begin() + CKK*jf,
                             weight.begin() + CKK*jf + CKK);
             std::sort(currow.begin(), currow.end());
             auto flag = currow[sprate * CKK];
-            for (auto jckk: Range<>(0, CKK)) {
+            FOR1 (jckk, 0, CKK) {
                 auto curval = weight[jf * CKK + jckk];
                 if (curval > flag) {
                     wvals.push_back(curval);
@@ -253,5 +258,9 @@ public:
         assert(status == SPARSE_STATUS_SUCCESS);
     }
 };
+
+
+#undef FOR1
+#undef CONSTSTR
 
 #endif  // _TESTBED_H_
