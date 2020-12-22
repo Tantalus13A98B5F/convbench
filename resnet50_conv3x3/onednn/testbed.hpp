@@ -211,12 +211,12 @@ protected:
         auto aScratch = DimIdx<6>{N, C, K, K, H, W}.bind<true>(scratch);
         auto aData = DimIdx<4>{N, C, H+2, W+2}.bind(data);
         FOR1 (in, 0, N)
+        FOR1 (ic, 0, C)
         FOR1 (ih, 0, H)
         FOR1 (iw, 0, W)
         FOR1 (kh, 0, K)
         FOR1 (kw, 0, K)
-        FOR1 (ic, 0, C)
-            aScratch(in, ic, ih, iw, kh, kw) = aData(in, ic, ih + kh, iw + kw);
+            aScratch(in, ic, kh, kw, ih, iw) = aData(in, ic, ih + kh, iw + kw);
     }
 
     void compute_kernel() {

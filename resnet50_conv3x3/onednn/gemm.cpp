@@ -21,30 +21,22 @@ int main() {
         read_binary(weightfile, weight);
         int HW = 64 * 256 / Co;
         CaseProvider cp(indata, {nbatch, Ci, HW, HW}, weight, dWeight);
-        tensor_t ret0;
-        int repeat_cnt = 1;
-        {
-            auto nchw = cp.newConv<NCHWDirectConv>();
-            for (auto r: Range<>(0, repeat_cnt))
-                nchw->compute();
-            ret0 = nchw->get_result();
-        }
+        tensor_t ret1, ret2;
+        int repeat_cnt = 10;
         {
             auto nchw = cp.newConv<NCHWMklGemmConv>();
             for (auto r: Range<>(0, repeat_cnt))
                 nchw->compute();
-            auto ret1 = nchw->get_result();
-            float diff = square_diff(ret0, ret1);
-            std::cout << "diff1," << diff << std::endl;
+            ret1 = nchw->get_result();
         }
         {
             auto nhwc = cp.newConv<NHWCMklGemmConv>();
             for (auto r: Range<>(0, repeat_cnt))
                 nhwc->compute();
-            auto ret1 = nhwc->get_result();
-            float diff = square_diff(ret0, ret1);
-            std::cout << "diff2," << diff << std::endl;
+            ret2 = nhwc->get_result();
         }
+        float diff = square_diff(ret1, ret2);
+        std::cout << "diff," << diff << std::endl;
         {
             auto nchwcsr = cp.newConv<NCHWMklSpGemmConv>();
             for (auto i: Range<>(0, 5)) {
