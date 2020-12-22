@@ -1,6 +1,6 @@
 CXX := icpc
 DNNLPATH := ${HOME}/dnnl_lnx_1.7.0_cpu_iomp
-CFLAGS := -O3 -xHost -std=c++11
+CFLAGS := -O3 -xHost -std=c++11 -g
 DNNLLD := -L${DNNLPATH}/lib -Wl,-rpath=${DNNLPATH}/lib -ldnnl
 DNNLCF := -I${DNNLPATH}/include
 MKLCF := -mkl=parallel

@@ -42,10 +42,6 @@ protected:
         dData.unpack(N, C, H, W);
         dWeight.unpack(F, DI::None, K, DI::None);
         assert (dWeight.validate(DI::Any, C, 3, K));
-        size_alloc();
-    }
-
-    virtual void size_alloc() {
         result.resize(N * F * H * W);
     }
 
@@ -121,14 +117,9 @@ protected:
     const char* alg() { return "gemm"; }
     const char* impl() { return "mkl"; }
 
-    void size_alloc() {
-        NCHWDirectConv::size_alloc();
-        scratch.resize(N * H * W * C * K * K);
-    }
-
     void im2col() {
         auto aData = DimIdx<4>{N, C, H+2, W+2}.bind(data);
-        auto aScratch = DimIdx<6>{N, H, W, C, K, K}.bind(scratch);
+        auto aScratch = DimIdx<6>{N, H, W, C, K, K}.bind<true>(scratch);
         for (auto in: Range<>(0, N))
         for (auto ic: Range<>(0, C))
         for (auto ih: Range<>(0, H))
@@ -176,7 +167,7 @@ protected:
     }
 
     void im2col() {
-        auto aScratch = DimIdx<6>{N, H, W, K, K, C}.bind(scratch);
+        auto aScratch = DimIdx<6>{N, H, W, K, K, C}.bind<true>(scratch);
         auto aData = DimIdx<4>{N, H+2, W+2, C}.bind(data);
         for (auto in: Range<>(0, N))
         for (auto ih: Range<>(0, H))
@@ -222,7 +213,7 @@ protected:
     float sparsity() { return sprate; }
 
     void im2col() {
-        auto aScratch = DimIdx<6>{N, C, K, K, H, W}.bind(scratch);
+        auto aScratch = DimIdx<6>{N, C, K, K, H, W}.bind<true>(scratch);
         auto aData = DimIdx<4>{N, C, H+2, W+2}.bind(data);
         for (auto in: Range<>(0, N))
         for (auto ih: Range<>(0, H))
