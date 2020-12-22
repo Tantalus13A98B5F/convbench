@@ -21,8 +21,10 @@ public:
 
     template <typename ConvClass>
     std::unique_ptr<ConvClass> newConv() {
-        return std::unique_ptr<ConvClass>(
-            new ConvClass(data, dData, weight, dWeight));
+        auto ret = new ConvClass;
+        ret->check_size(dData, dWeight);
+        ret->prepare_data(data, weight);
+        return std::unique_ptr<ConvClass>(ret);
     }
 };
 
@@ -37,25 +39,6 @@ protected:
     virtual const char* impl() { return "raw"; }
     virtual const char* spfmt() { return "none"; }
     virtual float sparsity() { return 0; }
-
-    void check_size(const DimIdx<4> &dData, const DimIdx<4> &dWeight) {
-        dData.unpack(N, C, H, W);
-        dWeight.unpack(F, DI::None, K, DI::None);
-        assert (dWeight.validate(DI::Any, C, 3, K));
-        result.resize(N * F * H * W);
-    }
-
-    virtual void format_convert(const tensor_t &data, const tensor_t &weight) {
-        auto aOrig = DimIdx<4>{N, C, H, W}.bind(data);
-        auto aNew = DimIdx<4>{N, C, H+2, W+2}.bind<true>(this->data);
-        for (auto in: Range<>(0, N))
-        for (auto ic: Range<>(0, C))
-        for (auto ih: Range<>(0, H))
-        for (auto iw: Range<>(0, W))
-            aNew(in, ic, ih, iw) = aOrig(in, ic, ih, iw);
-        
-        this->weight = weight;
-    }
 
     virtual void im2col() {}
 
@@ -80,14 +63,26 @@ protected:
     }
 
 public:
-    NCHWDirectConv(const tensor_t &data,   const DimIdx<4> &dData,
-                   const tensor_t &weight, const DimIdx<4> &dWeight)
-    {
-        check_size(dData, dWeight);
-        format_convert(data, weight);
+    virtual ~NCHWDirectConv() {}
+
+    void check_size(const DimIdx<4> &dData, const DimIdx<4> &dWeight) {
+        dData.unpack(N, C, H, W);
+        dWeight.unpack(F, DI::None, K, DI::None);
+        assert (dWeight.validate(DI::Any, C, 3, K));
+        result.resize(N * F * H * W);
     }
 
-    virtual ~NCHWDirectConv() {}
+    virtual void prepare_data(const tensor_t &data, const tensor_t &weight) {
+        auto aOrig = DimIdx<4>{N, C, H, W}.bind(data);
+        auto aNew = DimIdx<4>{N, C, H+2, W+2}.bind<true>(this->data);
+        for (auto in: Range<>(0, N))
+        for (auto ic: Range<>(0, C))
+        for (auto ih: Range<>(0, H))
+        for (auto iw: Range<>(0, W))
+            aNew(in, ic, ih+1, iw+1) = aOrig(in, ic, ih, iw);
+        
+        this->weight = weight;
+    }
 
     void compute() {
         auto t1 = steady_clock::now();
@@ -138,33 +133,12 @@ protected:
                     0, result.data() + in * F * HW, HW);
         }
     }
-
-public:
-    using NCHWDirectConv::NCHWDirectConv;
 };
 
 
 class NHWCMklGemmConv: public NCHWMklGemmConv {
 protected:
     const char* fmt() { return "NHWc"; }
-
-    void format_convert(const tensor_t &data, const tensor_t &weight) {
-        auto dOrig = DimIdx<4>{N, C, H, W}.bind(data);
-        auto dNew = DimIdx<4>{N, H+2, W+2, C}.bind<true>(this->data);
-        for (auto in: Range<>(0, N))
-        for (auto ic: Range<>(0, C))
-        for (auto ih: Range<>(0, H))
-        for (auto iw: Range<>(0, W))
-            dNew(in, ih, iw, ic) = dOrig(in, ic, ih, iw);
-        
-        auto wOrig = DimIdx<4>{F, C, K, K}.bind(weight);
-        auto wNew = DimIdx<4>{F, K, K, C}.bind<true>(this->weight);
-        for (auto jf: Range<>(0, F))
-        for (auto ic: Range<>(0, C))
-        for (auto kh: Range<>(0, K))
-        for (auto kw: Range<>(0, K))
-            wNew(jf, kh, kw, ic) = wOrig(jf, ic, kh, kw);
-    }
 
     void im2col() {
         auto aScratch = DimIdx<6>{N, H, W, K, K, C}.bind<true>(scratch);
@@ -187,7 +161,23 @@ protected:
     }
 
 public:
-    using NCHWMklGemmConv::NCHWMklGemmConv;
+    void prepare_data(const tensor_t &data, const tensor_t &weight) {
+        auto dOrig = DimIdx<4>{N, C, H, W}.bind(data);
+        auto dNew = DimIdx<4>{N, H+2, W+2, C}.bind<true>(this->data);
+        for (auto in: Range<>(0, N))
+        for (auto ic: Range<>(0, C))
+        for (auto ih: Range<>(0, H))
+        for (auto iw: Range<>(0, W))
+            dNew(in, ih+1, iw+1, ic) = dOrig(in, ic, ih, iw);
+        
+        auto wOrig = DimIdx<4>{F, C, K, K}.bind(weight);
+        auto wNew = DimIdx<4>{F, K, K, C}.bind<true>(this->weight);
+        for (auto jf: Range<>(0, F))
+        for (auto ic: Range<>(0, C))
+        for (auto kh: Range<>(0, K))
+        for (auto kw: Range<>(0, K))
+            wNew(jf, kh, kw, ic) = wOrig(jf, ic, kh, kw);
+    }
 
     tensor_t get_result() {
         tensor_t nchwresult;
@@ -236,8 +226,6 @@ protected:
     }
 
 public:
-    using NCHWMklGemmConv::NCHWMklGemmConv;
-
     void sparsity(float s) {
         sprate = s;
         spweight.reset(new sparse_matrix_t());
