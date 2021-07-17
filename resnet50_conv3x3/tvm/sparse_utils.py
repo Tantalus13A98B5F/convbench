@@ -25,6 +25,16 @@ def make_bsr_sparse(dense, sprate, blocksize):
     return scipy.sparse.bsr_matrix(bsrdata2, shape=dense.shape)
 
 
+def random_bsr_sparse(shape, blocksize, nnz):
+    dense = np.random.rand(*shape).astype('float32')
+    sparse = scipy.sparse.bsr_matrix(dense, blocksize=blocksize)
+    total = sparse.data.shape[0]
+    for idx in np.random.choice(total, total - nnz, replace=False):
+        sparse.data[idx, :, :] = 0
+    sparse.eliminate_zeros()
+    return sparse
+
+
 def unpack_bsr(bsrdata):
     return bsrdata.data, bsrdata.indices, bsrdata.indptr
 

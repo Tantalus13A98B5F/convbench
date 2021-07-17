@@ -6,22 +6,30 @@ import numpy as np
 from sparse_utils import *
 
 
-# logging
-logging.basicConfig(level=logging.INFO)
-logging.captureWarnings(True)
+tgtstr = 'llvm -mcpu=cascadelake'
 
 
-# environment
-os.environ['OMP_NUM_THREADS'] = '1'
-tgtstr = 'llvm -mcpu=znver2'
+from collections import namedtuple
+ResNet56Conv = namedtuple('ResNet56Conv',
+        'nfilters channels image nnz')
+with open('fmt.txt') as f:
+    caselist = [
+            ResNet56Conv(*[int(i) for i in l.strip().split(',')])
+            for l in f if l.strip()]
 
 
 class Conv2dCase:
     def iter_shape(self):
+        # resnet56
+        N, H, W = 10, 32, 32
+        for C in [16, 32, 64]:
+            yield (N, C, H * 16 // C, W * 16 // C)
+        return
         # resnet50
         N, H, W = 10, 512, 512
         for C in [64, 128, 256, 512]:
             yield (N, C, H * 32 // C, W * 32 // C)
+        return
 
     def prepare_data(self, *args):
         return None
@@ -53,22 +61,26 @@ class MMConv2dCase(Conv2dCase):
 
 class SpConv2dCase(Conv2dCase):
     def iter_shape(self):
-        yield from (
-            (*shape, sprate, veclen)
-            for shape in super().iter_shape()
-            for sprate in [0.5, 0.6, 0.7, 0.8, 0.9]
-            for veclen in [4, 8, 16]
-        )
+        #yield from (
+        #    (*shape, sprate, veclen)
+        #    for shape in super().iter_shape()
+        #    for sprate in [0.5, 0.6, 0.7, 0.8, 0.9]
+        #    for veclen in [4, 8, 16]
+        #)
+        for case in caselist:
+            yield (10, case.channels, case.image, case.image,
+                   case.nnz, case.nfilters)
     
-    def prepare_data(self, N, C, H, W, sprate, veclen):
+    def prepare_data(self, N, C, H, W, nnz, veclen):
         nhwc_data = np.random.randint(0, 256, (N, H, W, C)).astype('float32')
-        weight_ohwi = np.random.rand(C, 3*3*C).astype('float32')
-        spweight_ohwi = make_bsr_sparse(weight_ohwi, sprate, (veclen, 1))
+        #weight_ohwi = np.random.rand(C, 3*3*C).astype('float32')
+        #spweight_ohwi = make_bsr_sparse(weight_ohwi, sprate, (veclen, 1))
+        spweight_ohwi = random_bsr_sparse((C, 9*C), (veclen, 1), nnz)
         ret = np.zeros((N*H*W, C), dtype='float32')
         return [nhwc_data, *unpack_bsr(spweight_ohwi), ret]
 
-    def configure_task(self, N, C, H, W, sprate, veclen, data):
-        NNZ = data[1].shape[0]
+    def configure_task(self, N, C, H, W, NNZ, veclen, data):
+        #NNZ = data[1].shape[0]
         import conv2d_gemm
         return autotvm.task.create(
             'spconv2d_3x3_gemm', target=tgtstr,
@@ -89,7 +101,7 @@ def tune(case, n_trial, result_file, best_file=None):
     for shape in case.iter_shape():
         data = case.prepare_data(*shape)
         task = case.configure_task(*shape, data)
-        logging.info(task.config_space)
+        logging.info('task: %s, %s, %s', task.name, task.args, len(task.config_space))
         runner = autotvm.LocalRunner(number=4, repeat=3, timeout=20)
         mopt = autotvm.measure_option(builder='local', runner=runner)
         with case.configure_data(runner, data):
@@ -103,4 +115,10 @@ def tune(case, n_trial, result_file, best_file=None):
 
 
 if __name__ == '__main__':
-    tune(SpConv2dCase(), 10, 'spconv.log')
+    # logging
+    logging.basicConfig(level=logging.INFO)
+    logging.captureWarnings(True)
+    # tuning
+    os.environ['OMP_NUM_THREADS'] = '1'
+    tune(Conv2dCase(), 200, 'spconv56.log', 'spconv56.best.log')
+    tune(SpConv2dCase(), 200, 'spconv56.log', 'spconv56.best.log')
